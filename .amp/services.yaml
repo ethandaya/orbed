@@ -1,0 +1,11 @@
+services:
+  portal-probe:
+    command: node examples/counter.mjs
+    health: /health
+    portal:
+      title: Portal instrumentation probe
+  shop:
+    command: node examples/shop.mjs
+    health: /health
+    portal:
+      title: Disposable notebook checkout
