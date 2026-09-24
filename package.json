@@ -1,0 +1,28 @@
+{
+  "name": "orbed",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Prompt-driven portal tests executed by Amp agents",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./plugin": { "types": "./dist/plugin.d.ts", "import": "./dist/plugin.js" }
+  },
+  "bin": { "orbed": "./dist/cli.js" },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@ampcode/sdk": "0.1.0-20260918210405-g81edbf0",
+    "@ampcode/plugin": "0.0.0-20260923001649-g009f5d9"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  }
+}
