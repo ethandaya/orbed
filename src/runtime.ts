@@ -37,16 +37,24 @@ export async function executeTest(
     const completion = (options.timeoutMs === undefined ? interruptible : withTimeout(interruptible, options.timeoutMs, 'Step'))
       .catch(stop).finally(() => { pending = undefined })
     pending = completion
-    // Missing awaits must fail the test, not become unhandled process rejections.
+    // A bare discarded call stays in this set. `await` and `return` remove it. `.then()` adopts
+    // the promise, so a discarded chain cannot be distinguished from an awaited one.
     completion.catch(() => {})
     unconsumed.add(completion)
-    // A thenable lets await/return consume the operation even if execution already settled.
     return {
-      then(onfulfilled, onrejected) { unconsumed.delete(completion); return completion.then(onfulfilled, onrejected) },
-      catch(onrejected) { unconsumed.delete(completion); return completion.catch(onrejected) },
-      finally(onfinally) { unconsumed.delete(completion); return completion.finally(onfinally) },
-      [Symbol.toStringTag]: 'Promise',
-    }
+      then(onfulfilled, onrejected) {
+        unconsumed.delete(completion)
+        return completion.then(onfulfilled, onrejected)
+      },
+      catch(onrejected: (reason: unknown) => unknown) {
+        unconsumed.delete(completion)
+        return completion.catch(onrejected)
+      },
+      finally(onfinally: () => void) {
+        unconsumed.delete(completion)
+        return completion.finally(onfinally)
+      },
+    } as Promise<void>
   }
   const resource = (kind: Target['kind'], name: string): Resource => {
     if (closed) throw new Error('Test has stopped')

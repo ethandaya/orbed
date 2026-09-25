@@ -19,7 +19,6 @@ export type Event = {
   text?: string
   snapshot?: string
   screenshot?: string
-  screenshotURL?: string
   error?: string
   recoverable?: boolean
   assertion?: number
@@ -41,7 +40,6 @@ export type Result = {
   assessments?: Assessment[]
   steps?: (Step & { status: Status; reason?: string })[]
   durationMs?: number
-  artifacts?: { evidenceURL: string; screenshotURLs: string[] }
 }
 export type Report = {
   schemaVersion: 1
@@ -128,8 +126,26 @@ export function evaluate(step: Step, events: Event[], portals: PortalURLs, start
   return { assessments, ...(uncertain ? incomplete(uncertain.reason) : failed ? { status: 'failed' as const, reason: failed.reason } : { status: 'passed' as const }) }
 }
 
+const sha = (value: unknown, length: number) => typeof value === 'string' && new RegExp(`^[a-f0-9]{${length}}$`).test(value)
+
+/** Fail closed for partial, inconsistent, or unsuccessful reports. */
+export function parseReport(value: unknown): Report {
+  if (!value || typeof value !== 'object') throw new Error('Invalid Orbed report')
+  const report = value as Report
+  if (report.schemaVersion !== 1 || typeof report.runID !== 'string' ||
+      typeof report.complete !== 'boolean' || typeof report.passed !== 'boolean' ||
+      typeof report.clean !== 'boolean' || !sha(report.revision, 40) || !sha(report.sourceHash, 64) ||
+      !Array.isArray(report.results) || (report.error !== undefined && typeof report.error !== 'string') ||
+      report.results.some(result => !result || typeof result.name !== 'string' || !['passed', 'failed', 'incomplete'].includes(result.status))) {
+    throw new Error('Invalid Orbed report')
+  }
+  const failed = report.error !== undefined || !report.complete || report.results.length === 0 || report.results.some(result => result.status !== 'passed')
+  if (report.passed !== !failed) throw new Error('Invalid Orbed report')
+  return report
+}
+
 /** Fail closed for partial, empty, or unsuccessful reports. */
 export function exitCode(report: Report): number {
-  return report.complete && !report.error && report.passed && report.results.length > 0 &&
+  return report.error === undefined && report.complete && report.passed && report.results.length > 0 &&
     report.results.every(result => result.status === 'passed') ? 0 : 1
 }

@@ -119,10 +119,10 @@ check('test timeout and cancellation reject the callback step before late comple
     if (cancel) controller.abort(new Error('Parent cancelled'))
     await assert.rejects(running, /timed out|Parent cancelled/)
     // Race against an independent turn: this must reject without releasing the executor.
-    assert.equal(await Promise.race([
-      operation.then(() => 'resolved', () => 'rejected'),
-      new Promise(resolve => setImmediate(() => resolve('pending'))),
-    ]), 'rejected')
+    let settled = 'pending'
+    operation.then(() => { settled = 'resolved' }, () => { settled = 'rejected' })
+    await new Promise(setImmediate)
+    assert.equal(settled, 'rejected')
     gate.resolve()
     await new Promise(setImmediate)
     assert.equal(continued, false)

@@ -4,8 +4,7 @@ Acceptance tests carried out by Amp agents in an orb. Describe an action, await
 its completion, then check the running app through its portals, databases and
 services. Orbed captures evidence and returns a test result.
 
-**Local MVP, not published.** Remote CI is experimental; fresh-orb end-to-end
-execution has not been verified.
+**Local MVP, not published.** A suite runs in the current orb and returns pass or fail.
 
 ## The core API
 
@@ -72,10 +71,9 @@ your own callback obtains. Callback code runs in the plugin host; resolve file
 paths relative to `import.meta.url` rather than assuming a repository working
 directory. Instrumented agent commands do run from the repository root.
 All Orbed operations must be awaited sequentially.
-Overlapping calls (`Promise.all`), outstanding operations, and discarded operation
-promises fail the test—even if a discarded operation already finished. Handles
-return Promise-compatible thenables that track consumption through `await`, return,
-or promise methods; this does not detect discarded chains after `.then()`/`.catch()`.
+Overlapping calls (`Promise.all`) and a bare discarded operation fail the test,
+even if that operation already finished. `handle.then(...)` adopts the promise, so
+a discarded chain is not detectable. Await the call directly.
 A failed action or expectation rejects, blocks later Orbed operations,
 and remains a failure even if the callback catches its exception.
 
@@ -248,36 +246,10 @@ covered. Reports are local evidence, not signed attestations.
 orbed check .orbed/<run-id>/report.json
 ```
 
-Exit codes: **0** passed, **1** failed/incomplete, **2** invalid input/transport.
-`check` reads a saved report; it does not rerun tests or certify freshness. No Git
-hook or push authorization is installed. Run a fresh suite before pushing.
-
-## Remote CI remains experimental
-
-```sh
-# Supply AMP_API_KEY through the CI secret store.
-orbed run --project team/app --revision "$GITHUB_SHA" \
-  --output orbed-report.json --artifacts orbed-artifacts
-```
-
-The SDK creates an orb and prompts Amp to call `orbed_run`, consuming the correlated
-tool result rather than assistant prose. The project must already contain this
-library, plugin, tests and working setup at the requested clean commit.
-`--revision` validates; it does not select a branch or upload local work.
-When `--artifacts` is set, each test's evidence manifest and screenshots are
-uploaded by the plugin and immediately downloaded into the named directory along
-with a copy of the report. Treat URLs retained in the report as credentials that
-may expire; publish the downloaded directory through the CI provider's artifact
-mechanism rather than relying on those URLs later. The directory must not already
-exist; malformed or partial bundles are rejected and removed.
-Fresh-orb end-to-end execution is unverified; do not use it as a required release
-gate yet. The remote wait defaults to fifteen minutes (`--timeout-ms`, maximum
-one hour). Aborting the SDK process propagates cancellation to Amp; the plugin
-also cancels child work when either the parent tool or parent turn is cancelled.
-Guaranteed server-side cancellation and archival after a network partition remain
-unverified, so the timeout is not a hard spend cap. Individual evidence uploads
-are bounded to twenty seconds and stop blocking Orbed when the suite is cancelled;
-the attachment API does not expose cancellation for an upload already in flight.
+Exit codes: **0** passed, **1** failed/incomplete, **2** invalid report.
+`check` reads a saved report; it does not rerun tests. A report must be internally
+consistent: `passed` is true only when the suite completed without error and every
+result passed. No Git hook or push authorization is installed.
 
 ## Develop and migrate
 

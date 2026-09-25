@@ -11,10 +11,9 @@ import { portalPathURL, resolveResource, type Binding, type Resources, type Port
 import { executeTest } from './runtime.js'
 
 const exec = promisify(execFile)
-type Hook = { event: string; tool: string; toolUseID: string; status?: string }
 type Run = {
   test: PortalTest; portals: PortalURLs; current: string; directory: string; session: string; threadID?: ThreadID
-  events: Event[]; hooks: Hook[]; closed: boolean; pending?: Promise<string>
+  events: Event[]; closed: boolean; pending?: Promise<string>
   cleanup?: Promise<void>; archived?: boolean; cleanupError?: string
   steps: Step[]; step?: Step; start: number; finished: boolean
   prompt?: string; ended?: (status: string) => void
@@ -59,9 +58,6 @@ export function orbed(tests: readonly PortalTest[], options: Resources & { allow
         if (eventName === 'tool.result' && 'status' in event && event.status === 'cancelled' && event.tool.endsWith('orbed_run')) {
           suites.get(event.thread.id)?.abort(new Error('Orbed suite cancelled'))
         }
-        const run = active.get(event.thread.id)
-        if (run) run.hooks.push({ event: eventName, tool: event.tool, toolUseID: event.toolUseID,
-          status: 'status' in event ? event.status : undefined })
         if (eventName === 'tool.call') return { action: 'allow' as const }
       })
     }
@@ -240,12 +236,9 @@ export function orbed(tests: readonly PortalTest[], options: Resources & { allow
     })
     amp.registerTool({
       name: 'orbed_run',
-      description: 'Run portal claims using Amp agents in this orb. Returns structured model assessments backed by host-captured browser evidence. Optionally require an exact clean Git revision for CI.',
-      inputSchema: { type: 'object', properties: {
-        revision: { type: 'string', pattern: '^[a-f0-9]{40}$' },
-        artifacts: { type: 'boolean' },
-      }, additionalProperties: false },
-      async execute(input, ctx) {
+      description: 'Run the configured Orbed suite in this orb. Returns pass/fail backed by host-captured evidence.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      async execute(_input, ctx) {
         if (running) throw new Error('A suite is already running')
         running = true
         const controller = new AbortController()
@@ -254,17 +247,10 @@ export function orbed(tests: readonly PortalTest[], options: Resources & { allow
         const directory = join(root, '.orbed', runID)
         const report: Report = { schemaVersion: 1, runID, complete: false, passed: false, revision: '', sourceHash: '', clean: false, results: [] }
         const saveReport = () => writeFile(join(directory, 'report.json'), JSON.stringify(report, null, 2))
-        const uploadArtifact = async (path: string, mimeType: string, label: string) => {
-          controller.signal.throwIfAborted()
-          const data = await readFile(path)
-          controller.signal.throwIfAborted()
-          return withTimeout(amp.attachments.upload({ data, mimeType }), 20_000, label, controller.signal)
-        }
         try {
           await mkdir(directory, { recursive: true })
           await saveReport()
           Object.assign(report, await source(root))
-          if (input.revision && (input.revision !== report.revision || !report.clean)) throw new Error('Expected revision does not match a clean checkout')
           let stdout: string
           try {
             stdout = (await exec('amp', ['orb', 'services', 'ensure', '--json'], { cwd: root, timeout: 90_000, killSignal: 'SIGKILL' })).stdout
@@ -283,7 +269,7 @@ export function orbed(tests: readonly PortalTest[], options: Resources & { allow
             report.results.push(result)
             await saveReport()
             const run: Run = { test, portals: {}, current: '', directory: join(directory, String(index)),
-              session: `orbed-${runID.slice(0, 8)}-${index}`, events: [], hooks: [], closed: false,
+              session: `orbed-${runID.slice(0, 8)}-${index}`, events: [], closed: false,
               steps: [], start: 0, finished: true }
             const bindings = new Map<string, Binding>()
             let thread: AgentThread | undefined
@@ -376,18 +362,6 @@ export function orbed(tests: readonly PortalTest[], options: Resources & { allow
               if (run.cleanupError) {
                 result.status = 'incomplete'
                 result.reason = run.cleanupError
-              }
-              if (input.artifacts === true) {
-                const screenshotURLs: string[] = []
-                for (const event of run.events) {
-                  if (!event.screenshot) continue
-                  const attachment = await uploadArtifact(event.screenshot, 'image/png', 'Screenshot upload')
-                  event.screenshotURL = attachment.url
-                  screenshotURLs.push(attachment.url)
-                }
-                await save(run)
-                const evidence = await uploadArtifact(join(run.directory, 'evidence.json'), 'application/json', 'Evidence upload')
-                result.artifacts = { evidenceURL: evidence.url, screenshotURLs }
               }
               await saveReport()
             }
