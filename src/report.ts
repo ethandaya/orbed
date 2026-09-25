@@ -216,20 +216,20 @@ export function evaluate(step: Step, events: Event[], portals: PortalURLs, start
   if (events.at(-1)?.action !== 'finish') return incomplete('Agent did not finish')
   const checks = events.slice(start).filter(e => e.action === 'check' && !e.error)
   if (checks.length !== 1) return incomplete('Missing or duplicate step assessment')
-  if (events.at(-2) !== checks[0]) return incomplete('Assessment must follow all step operations')
-  for (const check of checks) {
-    const assessment = check.assessment
-    if (!assessment || assessment.claim !== step.instruction ||
-        !['supported', 'contradicted', 'insufficient-evidence'].includes(assessment.verdict) ||
-        typeof assessment.reason !== 'string' || !assessment.reason.trim() ||
-        !Array.isArray(assessment.evidence) || !assessment.evidence.length) {
-      return incomplete('Invalid assertion evidence')
-    }
-    const error = evidenceError(assessment.evidence, events.slice(0, events.indexOf(check)), portals, step.target, start - 1)
-    if (error) return incomplete(error)
+  const check = checks[0]
+  if (events.at(-2) !== check) return incomplete('Assessment must follow all step operations')
+  const assessment = check.assessment
+  if (!assessment || assessment.claim !== step.instruction || !isVerdict(assessment.verdict) ||
+      typeof assessment.reason !== 'string' || !assessment.reason.trim() ||
+      !Array.isArray(assessment.evidence) || !assessment.evidence.length) {
+    return incomplete('Invalid assertion evidence')
   }
-  const assessments = checks.map(check => check.assessment!)
-  const uncertain = assessments.find(a => a.verdict === 'insufficient-evidence')
-  const failed = assessments.find(a => a.verdict === 'contradicted')
-  return { assessments, ...(uncertain ? incomplete(uncertain.reason) : failed ? { status: 'failed' as const, reason: failed.reason } : { status: 'passed' as const }) }
+  const error = evidenceError(assessment.evidence, events.slice(0, events.indexOf(check)), portals, step.target, start - 1)
+  if (error) return incomplete(error)
+  return {
+    assessments: [assessment],
+    ...(assessment.verdict === 'insufficient-evidence' ? incomplete(assessment.reason)
+      : assessment.verdict === 'contradicted' ? { status: 'failed' as const, reason: assessment.reason }
+      : { status: 'passed' as const }),
+  }
 }
