@@ -1,6 +1,6 @@
 {
   "name": "orbed",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Prompt-driven portal tests executed by Amp agents",
   "license": "MIT",
   "repository": {
