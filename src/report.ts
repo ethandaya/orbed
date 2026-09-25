@@ -3,9 +3,15 @@ import type { Step } from './runtime.ts'
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, relative } from 'node:path'
 
+export const VERDICTS = ['supported', 'contradicted', 'insufficient-evidence'] as const
+export type Verdict = typeof VERDICTS[number]
+
+export const isVerdict = (value: unknown): value is Verdict =>
+  typeof value === 'string' && VERDICTS.includes(value as Verdict)
+
 export type Assessment = {
   claim: string
-  verdict: 'supported' | 'contradicted' | 'insufficient-evidence'
+  verdict: Verdict
   reason: string
   evidence: number[]
 }
