@@ -1,6 +1,6 @@
-import type { PortalTest, Resource, StepOptions, TestContext } from './index.js'
-import type { Target } from './portals.js'
-import { withTimeout } from './timeout.js'
+import type { PortalTest, Resource, StepOptions, TestContext } from './index.ts'
+import type { Target } from './portals.ts'
+import { withTimeout } from './timeout.ts'
 
 export type Step = {
   kind: 'action' | 'expect'

@@ -6,5 +6,5 @@
     "rootDir": ".",
     "types": ["bun", "node"]
   },
-  "include": ["tests/**/*.ts", "examples/**/*.orbed.ts", ".amp/plugins/**/*.ts"]
+  "include": ["tests/**/*.ts", "examples/**/*.ts", ".amp/plugins/**/*.ts", "orbed.config.ts"]
 }

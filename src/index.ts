@@ -1,4 +1,13 @@
+import type { Resources } from './portals.ts'
+import { register } from './registry.ts'
+
 export type StepOptions = { timeoutMs?: number }
+export type Config = Resources & { instructions?: string }
+
+/** Type-check orbed.config.ts. The plugin loads it fresh on every run. */
+export function defineConfig(config: Config): Config {
+  return config
+}
 export type Resource = {
   action(instruction: string, options?: StepOptions): Promise<void>
   expect(claim: string, options?: StepOptions): Promise<void>
@@ -19,7 +28,7 @@ export type PortalTest = {
 export type TestOptions = { viewport?: readonly [number, number]; timeout?: number }
 type Callback = PortalTest['run']
 
-/** Register a callback without executing it. The runner supplies live async handles. */
+/** Register a test without executing it. The runner supplies live async handles. */
 export function test(name: string, run: Callback, optionsOrTimeout: TestOptions | number = {}): PortalTest {
   if (!name.trim() || typeof run !== 'function') throw new Error('Test name and callback are required')
   const options = typeof optionsOrTimeout === 'number' ? { timeout: optionsOrTimeout } : optionsOrTimeout
@@ -29,5 +38,7 @@ export function test(name: string, run: Callback, optionsOrTimeout: TestOptions 
     throw new Error('Viewport dimensions must be integers from 1 to 4096')
   }
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600_000) throw new Error('timeout must be 1–600000')
-  return Object.freeze({ name, run, viewport: Object.freeze([...viewport]) as readonly [number, number], timeoutMs })
+  const declaration = Object.freeze({ name, run, viewport: Object.freeze([...viewport]) as readonly [number, number], timeoutMs })
+  register(declaration)
+  return declaration
 }

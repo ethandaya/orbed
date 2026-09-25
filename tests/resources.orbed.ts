@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile, readdir } from 'node:fs/promises'
 import { test } from 'orbed'
 
-export default [test('await service and database actions against real runtime state', async ({ db, services }) => {
+test('await service and database actions against real runtime state', async ({ db, services }) => {
   const shop = services.get('shop')
   const orders = db.get('orders')
   const customer = randomUUID()
@@ -22,4 +22,4 @@ export default [test('await service and database actions against real runtime st
   const cancelled = JSON.parse(await readFile(new URL(`${id}.json`, directory), 'utf8'))
   if (cancelled.status !== 'cancelled' || cancelled.quantity !== 3) throw new Error('Database action resolved before its write completed')
   await shop.expect(`GET /orders with x-customer header ${customer} returns exactly that order ${id}, now cancelled, with quantity three and total 3750 cents.`)
-}, 360_000)]
+}, 360_000)

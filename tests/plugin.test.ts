@@ -3,9 +3,10 @@ import assert from 'node:assert/strict'
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test } from '../dist/index.js'
-import { orbed } from '../dist/plugin.js'
+import { test } from '../src/index.ts'
+import { orbed } from '../src/plugin.ts'
 import type { PluginAPI } from '@ampcode/plugin'
+import type { Config, PortalTest } from '../src/index.ts'
 
 type Context = { thread: { id: string } }
 type ToolOutput = string | Array<{ type: string; text: string }>
@@ -15,6 +16,7 @@ type MockHook = (event: MockEvent) => void | Promise<void>
 type Report = { error?: string; complete: boolean; passed: boolean; runID: string; results: Array<{ status: string; reason: string; archived: boolean; evidence: string }> }
 type Evidence = { steps: Array<{ target: { kind: string } }>; events: Array<{ action: string; url?: string }> }
 
+const suite = (tests: PortalTest[], config: Config = {}) => async () => ({ tests, config })
 const parse = <T>(value: string): T => JSON.parse(value) as T
 const getTool = (tools: Map<string, MockTool>, name: string): MockTool => {
   const tool = tools.get(name)
@@ -75,7 +77,7 @@ else exit 1; fi
     }),
     test('missing binding', async ({ db }) => { await db.get('absent').expect('ready') }),
   ]
-  orbed(tests, { allowShell: true, databases: { orders: { service: 'store', instructions: 'Disposable test store' } } })({
+  orbed(suite(tests, { databases: { orders: { service: 'store', instructions: 'Disposable test store' } } }))({
     system: { workspaceRoot: `file://${process.cwd()}` }, helpers: { filePathFromURI: () => process.cwd() },
     registerTool: (tool: unknown) => { const mock = tool as MockTool; tools.set(mock.name, mock) },
     on: (name: string, fn: unknown) => hooks.set(name, fn as MockHook),
@@ -134,6 +136,53 @@ else exit 1; fi
   assert.equal(evidence.events.some(e => e.action === 'open'), false)
 }, 10_000)
 
+check('commands are rejected on portal steps and allowed on resource and app-wide steps', async () => {
+  const bin = await mkdtemp(join(tmpdir(), 'orbed-shell-'))
+  const previousPath = process.env.PATH
+  await writeFile(join(bin, 'amp'), `#!/bin/sh
+if [ "$1" = orb ]; then printf '%s' '{"services":[{"name":"web","publicURL":"http://localhost:3000","listening":true,"port":3000},{"name":"worker","listening":true,"port":8080}]}'
+elif [ "$1" = threads ] && [ "$2" = archive ]; then exit 0
+else exit 1; fi
+`, { mode: 0o755 })
+  await writeFile(join(bin, 'agent-browser'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  process.env.PATH = `${bin}:${previousPath}`
+  cleanupTasks.push(async () => { process.env.PATH = previousPath; await rm(bin, { recursive: true, force: true }) })
+  const tools = new Map<string, MockTool>()
+  const hooks = new Map<string, MockHook>()
+  const outcomes = new Map<string, string>()
+  let agentCalls = 0
+  let children = 0
+  orbed(suite([
+    test('portal command', async ({ portals }) => { await portals.get('web').expect('portal claim') }),
+    test('service command', async ({ services }) => { await services.get('worker').expect('service claim') }),
+    test('app-wide command', async ({ expect }) => { await expect('app-wide claim') }),
+  ]))({
+    system: { workspaceRoot: `file://${process.cwd()}` }, helpers: { filePathFromURI: () => process.cwd() },
+    registerTool: (tool: unknown) => { const mock = tool as MockTool; tools.set(mock.name, mock) },
+    on: (name: string, fn: unknown) => hooks.set(name, fn as MockHook),
+    createAgent: ({ tools: allowed }: { tools: string[] }) => {
+      agentCalls++
+      assert.deepEqual(allowed, ['orbed_browser', 'orbed_command'])
+      return { createThread: async () => {
+        const id = `T-shell-${++children}`
+        return { id, cancel: async () => {}, appendUserMessage: async ({ content }: { content: string }) => {
+          const instruction = parse<{ instruction: string }>(content.match(/Current step: (.+)\. Execute ONLY/)![1]).instruction
+          try {
+            outcomes.set(instruction, String(await getTool(tools, 'orbed_command').execute({ command: 'true' }, { thread: { id } })))
+          } catch (error) { outcomes.set(instruction, (error as Error).message) }
+          await getHook(hooks, 'agent.end')({ thread: { id }, message: content, status: 'done' })
+        } }
+      } }
+    },
+  } as unknown as PluginAPI)
+  assert.ok(tools.has('orbed_command'))
+  await getTool(tools, 'orbed_run').execute({}, { thread: { id: 'T-parent' } })
+  assert.equal(agentCalls, 1)
+  assert.match(outcomes.get('portal claim') ?? '', /Portal steps use the browser/)
+  assert.doesNotThrow(() => parse<{ id: number }>(outcomes.get('service claim')!))
+  assert.doesNotThrow(() => parse<{ id: number }>(outcomes.get('app-wide claim')!))
+})
+
 check('click navigation to a different port cannot reuse pre-action portal evidence', async () => {
   const bin = await mkdtemp(join(tmpdir(), 'orbed-browser-'))
   const previousPath = process.env.PATH
@@ -161,7 +210,7 @@ esac
   const tools = new Map<string, MockTool>()
   const hooks = new Map<string, MockHook>()
   let rejected: { error?: string } | undefined
-  orbed([test('port escape', async ({ portal }) => { await portal.action('Click the link') })])({
+  orbed(suite([test('port escape', async ({ portal }) => { await portal.action('Click the link') })]))({
     system: { workspaceRoot: `file://${process.cwd()}` }, helpers: { filePathFromURI: () => process.cwd() },
     registerTool: (tool: unknown) => { const mock = tool as MockTool; tools.set(mock.name, mock) },
     on: (name: string, fn: unknown) => hooks.set(name, fn as MockHook),
@@ -221,9 +270,9 @@ else exit 1; fi
     let cancelled = 0
     const before = (await readFile(archives, 'utf8').catch(() => '')).split('\n').filter(Boolean).length
     if (!delayedAppend) await writeFile(hold, '')
-    orbed([test('cancel', async ({ services }) => {
+    orbed(suite([test('cancel', async ({ services }) => {
       await services.get('worker').expect('ready')
-    })], { allowShell: true })({
+    })]))({
       system: { workspaceRoot: `file://${process.cwd()}` }, helpers: { filePathFromURI: () => process.cwd() },
       registerTool: (tool: unknown) => { const mock = tool as MockTool; tools.set(mock.name, mock) },
       on: (name: string, fn: unknown) => hooks.set(name, fn as MockHook),

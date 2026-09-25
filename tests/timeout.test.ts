@@ -1,6 +1,6 @@
 import { afterEach, jest, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { withTimeout } from '../dist/timeout.js'
+import { withTimeout } from '../src/timeout.ts'
 
 afterEach(() => {
   jest.useRealTimers()

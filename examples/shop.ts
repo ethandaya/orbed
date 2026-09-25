@@ -1,6 +1,9 @@
 import { createServer } from 'node:http'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
+import type { AddressInfo } from 'node:net'
+
+type Order = { id: string; customer: string; status: string; quantity: number; totalCents: number }
 
 const directory = '.orbed/shop/orders'
 await mkdir(directory, { recursive: true })
@@ -76,20 +79,21 @@ document.querySelector('form').addEventListener('submit', async event => {
 });
 </script></html>`
 
-createServer(async (request, response) => {
+const server = createServer(async (request, response) => {
   try {
-    if (request.url === '/health') return response.end('ok')
+    const url = request.url ?? '/'
+    if (url === '/health') return response.end('ok')
     const customer = request.headers['x-customer']
-    const fault = (await readFile('.orbed/shop/fault', 'utf8').catch(error => {
+    const fault = (await readFile('.orbed/shop/fault', 'utf8').catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
       return 'none'
     })).trim()
-    const orders = async () => (await Promise.all((await readdir(directory)).map(name => readFile(directory + '/' + name, 'utf8').then(JSON.parse)))).filter(order => order.customer === customer)
-    if (request.method === 'GET' && request.url === '/orders') {
+    const orders = async () => (await Promise.all((await readdir(directory)).map(name => readFile(directory + '/' + name, 'utf8').then(text => JSON.parse(text) as Order)))).filter(order => order.customer === customer)
+    if (request.method === 'GET' && url === '/orders') {
       response.setHeader('Content-Type', 'application/json')
       return response.end(JSON.stringify(await orders()))
     }
-    const cancel = request.url.match(/^\/orders\/([a-f0-9-]{36})\/cancel$/)
+    const cancel = url.match(/^\/orders\/([a-f0-9-]{36})\/cancel$/)
     if (request.method === 'POST' && cancel) {
       const own = await orders()
       const selected = own.find(order => order.id === cancel[1])
@@ -100,18 +104,18 @@ createServer(async (request, response) => {
       }
       return response.end('cancelled')
     }
-    if (request.method === 'POST' && request.url === '/orders') {
+    if (request.method === 'POST' && url === '/orders') {
       let body = ''
       for await (const chunk of request) {
         body += chunk
         if (body.length > 1024) { response.writeHead(413); return response.end() }
       }
-      const { quantity } = JSON.parse(body)
+      const { quantity } = JSON.parse(body) as { quantity: number }
       if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
         response.writeHead(400); return response.end('Invalid quantity')
       }
       const order = { id: randomUUID(), customer, status: 'confirmed', quantity, totalCents: quantity * 1250 + (fault === 'total' ? 200 : 0) }
-      if (fault !== 'persistence') await writeFile(directory + '/' + order.id + '.json', JSON.stringify({ ...order, quantity: fault === 'stored-quantity' ? 1 : quantity }))
+      if (fault !== 'persistence') await writeFile(directory + '/' + order.id + '.json', JSON.stringify({ ...order, quantity: fault === 'stored-quantity' ? 1 : order.quantity }))
       response.setHeader('Content-Type', 'application/json')
       return response.end(JSON.stringify(order))
     }
@@ -120,6 +124,7 @@ createServer(async (request, response) => {
   } catch {
     response.writeHead(500); response.end('Order could not be placed.')
   }
-}).listen(Number(process.env.PORT), '0.0.0.0', function () {
-  console.log(JSON.stringify({ port: this.address().port }))
+})
+server.listen(Number(process.env.PORT), '0.0.0.0', () => {
+  console.log(JSON.stringify({ port: (server.address() as AddressInfo).port }))
 })

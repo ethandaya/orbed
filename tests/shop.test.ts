@@ -11,7 +11,7 @@ type Order = { id: string; totalCents: number; quantity: number; status: string 
 
 test('shop calibration has independent correct and regressed runtime outcomes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'orbed-shop-'))
-  const server = spawn('node', [fileURLToPath(new URL('../examples/shop.mjs', import.meta.url))], {
+  const server = spawn(process.execPath, [fileURLToPath(new URL('../examples/shop.ts', import.meta.url))], {
     cwd: root, env: { ...process.env, PORT: '0' }, stdio: ['ignore', 'pipe', 'inherit'],
   })
   try {

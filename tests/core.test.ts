@@ -1,15 +1,15 @@
 import { test as check } from 'bun:test'
 import assert from 'node:assert/strict'
-import { test } from '../dist/index.js'
-import { executeTest } from '../dist/runtime.js'
-import { orbed } from '../dist/plugin.js'
-import { evaluate, evidenceError, persistTerminalReport } from '../dist/report.js'
-import { portalPathURL, resolveResource } from '../dist/portals.js'
+import { test } from '../src/index.ts'
+import { executeTest } from '../src/runtime.ts'
+import { orbed } from '../src/plugin.ts'
+import { evaluate, evidenceError, persistTerminalReport } from '../src/report.ts'
+import { portalPathURL, resolveResource } from '../src/portals.ts'
 import type { PluginAPI, PluginToolDefinition } from '@ampcode/plugin'
-import type { PortalTest, Resource, TestContext } from '../dist/index.js'
-import type { Event, Report } from '../dist/report.js'
-import type { Step } from '../dist/runtime.js'
-import type { Resources, Service, Target } from '../dist/portals.js'
+import type { PortalTest, Resource, TestContext } from '../src/index.ts'
+import type { Event, Report } from '../src/report.ts'
+import type { Step } from '../src/runtime.ts'
+import type { Resources, Service, Target } from '../src/portals.ts'
 
 const portal: Target = { kind: 'portal', name: 'shop' }
 const db: Target = { kind: 'db', name: 'orders' }
@@ -42,8 +42,6 @@ check('test registration is lazy and options are immutable', () => {
   assert.deepEqual(declaration.viewport, [1280, 720])
   assert.throws(() => (declaration.viewport as [number, number])[0] = 1, TypeError)
   assert.throws(() => test('bad', () => {}, { viewport: [0, 720] }), /Viewport/)
-  assert.throws(() => orbed([]), /nonempty/)
-  assert.throws(() => orbed([declaration, declaration]), /unique/)
 })
 
 check('Bun-shaped declarations normalize numeric and object options without running callbacks', () => {
@@ -190,7 +188,7 @@ check('bindings use existing Amp services and fail on absent, ambiguous or unava
     { name: 'mail', port: 8025, listening: true },
   ]
   const resources: Resources = { databases: { orders: { service: 'postgres', instructions: 'Use the local orders database' } } }
-  const resolve = (target: Target, services: Service[] = configured, allow = true) => resolveResource(target, services, resources, allow)
+  const resolve = (target: Target, services: Service[] = configured) => resolveResource(target, services, resources)
   assert.deepEqual(resolve({ kind: 'portal', name: '' }).target, portal)
   assert.match(resolve(db).instructions, /postgres.*5432.*local orders/)
   assert.deepEqual(resolve(service).target, service)
@@ -199,7 +197,6 @@ check('bindings use existing Amp services and fail on absent, ambiguous or unava
   assert.throws(() => resolve(portal, [{ name: 'shop', listening: true }]), /not configured/)
   assert.throws(() => resolve(db, configured.map(s => ({ ...s, listening: false }))), /unavailable/)
   assert.throws(() => resolve(service, configured.map(s => ({ ...s, health: { ok: false } }))), /unavailable/)
-  assert.throws(() => resolve(db, configured, false), /allowShell/)
   assert.throws(() => resolve({ kind: 'portal', name: '' }, [...configured, { name: 'admin', publicURL: urls.admin, listening: true }]), /ambiguous/)
 })
 
@@ -215,7 +212,7 @@ check('missing resources fail at selection without starting an operation', async
   let operations = 0
   await assert.rejects(executeTest(test('missing', async ({ db }) => {
     await db.get('absent').expect('ready')
-  }), target => resolveResource(target, [], {}, true).target, async () => { operations++ }), /not bound/)
+  }), target => resolveResource(target, [], {}).target, async () => { operations++ }), /not bound/)
   assert.equal(operations, 0)
 })
 
@@ -296,22 +293,22 @@ check('recoverable targets and rejected citations still require correction', () 
   assert.equal(evaluate(step, rejected, urls).status, 'incomplete')
 })
 
-check('shell is opt-in and incomplete suites cannot pass', () => {
-  for (const allowShell of [false, true]) {
-    const tools: string[] = []
-    let browserTool!: { inputSchema: { properties: { action: { enum: string[] }, path: { type: string } } } }
-    const mock = {
-      system: { workspaceRoot: 'file:///tmp/orbed' }, helpers: { filePathFromURI: () => '/tmp/orbed' },
-      createAgent: () => ({}), on() {}, registerTool: (tool: PluginToolDefinition) => {
-        tools.push(tool.name)
-        if (tool.name === 'orbed_browser') browserTool = tool as unknown as typeof browserTool
-      },
-    } as unknown as PluginAPI
-    orbed([test('example', async () => {})], { allowShell })(mock)
-    assert.equal(tools.includes('orbed_command'), allowShell)
-    assert.ok(browserTool.inputSchema.properties.action.enum.includes('navigate'))
-    assert.equal(browserTool.inputSchema.properties.path.type, 'string')
-  }
+check('registration exposes the run, browser and gated command tools without loading the suite', () => {
+  const tools: string[] = []
+  let loads = 0
+  let browserTool!: { inputSchema: { properties: { action: { enum: string[] }, path: { type: string } } } }
+  const mock = {
+    system: { workspaceRoot: 'file:///tmp/orbed' }, helpers: { filePathFromURI: () => '/tmp/orbed' },
+    createAgent: () => ({}), on() {}, registerTool: (tool: PluginToolDefinition) => {
+      tools.push(tool.name)
+      if (tool.name === 'orbed_browser') browserTool = tool as unknown as typeof browserTool
+    },
+  } as unknown as PluginAPI
+  orbed(async () => { loads++; return { tests: [], config: {} } })(mock)
+  assert.equal(loads, 0)
+  assert.deepEqual(tools.sort(), ['orbed_browser', 'orbed_command', 'orbed_run'])
+  assert.ok(browserTool.inputSchema.properties.action.enum.includes('navigate'))
+  assert.equal(browserTool.inputSchema.properties.path.type, 'string')
 })
 
 check('cancellation during terminal persistence cannot leave a passing report', async () => {

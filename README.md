@@ -1,74 +1,70 @@
 # orbed
 
-Write acceptance tests in plain language. Amp agents execute each awaited step
-and return results backed by screenshots, page snapshots, and command output.
+Ask an agent to test your app end to end and prove it works, then rerun that
+check whenever you like. You write the steps as sentences. Amp agents carry them
+out in an [orb](https://ampcode.com/docs/orbs), and a step passes only on proof
+that orbed captured itself: screenshots, page snapshots, or command output.
 
-**Unpublished 0.0.1 · [MIT](LICENSE).** Bun-like authoring, Amp-owned execution:
-Orbed suites run through `orbed_run`, not `bun test`. No extra test registry,
-discovery system, hooks, or matcher library.
+Inspired by [Thorsten Ball](https://x.com/thorstenball/status/2102623376196194763):
+“test this e2e & give me irrefutable proof it works.”
 
-Requires an [Amp orb](https://ampcode.com/docs/orbs), Node 22+, configured Amp
-services, and `agent-browser`/Chromium for browser tests. Use disposable data
-without production credentials. Agent runs consume Amp credits.
+**Early alpha:** APIs will change, and runs consume Amp credits.
 
-## Start with one portal
+## Install
 
-Until publication, build this checkout with `npm ci --ignore-scripts && npm run build`,
-then install it in your app with `npm install --save-dev /path/to/orbed`.
+```sh
+npm i -D orbed && mkdir -p .amp/plugins && echo "export { default } from 'orbed/plugin'" > .amp/plugins/orbed.ts
+```
+
+## Write a test
 
 ```ts
 // tests/counter.orbed.ts
 import { test } from 'orbed'
 
-export default [test('increment', async ({ portal }) => {
+test('increment', async ({ portal }) => {
   await portal.action('Click Increment once.')
   await portal.expect('The count increased by one.')
-})]
+})
 ```
 
-Register your tests in the app's plugin:
+Then ask Amp: **“Run the Orbed suite using orbed_run.”**
 
-```ts
-// .amp/plugins/orbed.ts
-import { orbed } from 'orbed/plugin'
-import tests from '../../tests/counter.orbed.ts'
+Any `*.orbed.ts` file is picked up automatically. The `portal` shorthand works
+when the orb has exactly one portal; use `portals.get(name)` otherwise.
 
-export default orbed(tests)
+## How it works
+
+```text
+orbed_run
+  ├─ load orbed.config.ts and every *.orbed.ts (fresh each run)
+  ├─ per test: private Amp agent thread + fresh browser session
+  │    └─ per awaited step: one agent turn
+  │         ├─ portal step  → browser: open, navigate, snapshot, click, fill, press
+  │         ├─ db / service → shell commands against that resource
+  │         └─ close step   → cite host-captured evidence, or it's incomplete
+  └─ write .orbed/<run-id>/: report.json, evidence.json, screenshots
 ```
 
-Configure the app's portal through Amp's normal service setup, ask Amp to reload
-the plugin, then ask: **“Run the Orbed suite using orbed_run.”**
-The `portal` shorthand requires exactly one configured portal.
+- **Evidence gate.** A step passes only when the agent cites fresh snapshots or
+  command output that the host captured for that step's portal or resource.
+- **Portal steps stay in the UI.** Commands are rejected on portal steps, so a
+  UI action can't be faked through the API.
+- **Three outcomes.** `passed` means every step was supported, and `failed` means an
+  expectation was contradicted. `incomplete` covers uncertainty, missing
+  evidence, timeouts, and errors. A suite passes only if every test passes.
+- **No reloads.** Test and config edits apply on the next run. Run
+  `plugins: reload` once if you added the plugin mid-session.
 
-## Add viewports and deadlines
+## Scenarios
 
-The callback comes second; options or a timeout in milliseconds come third.
-Use ordinary JavaScript to generate cases:
-
-```ts
-import { test } from 'orbed'
-
-export default [390, 1280].map(width => test(`checkout at ${width}px`, async ({ portal }) => {
-  await portal.action('Order two notebooks.')
-  await portal.expect('The confirmation matches the advertised price.')
-}, { viewport: [width, 720], timeout: 180_000 }))
-```
-
-`test(name, callback, 180_000)` sets only the timeout. Defaults: 120 seconds,
-1280 × 720, 2× screenshots. Per-step limits use
-`await portal.expect('The export is ready.', { timeoutMs: 30_000 })`.
-Test and step limits have a ten-minute maximum.
-
-## Check the UI, storage, and service together
-
-Named handles select existing Amp resources. This example uses the repository's
-disposable `shop` service and JSON order store; adapt bindings to your app.
+### UI, database, and API in one test
 
 ```ts
 // tests/checkout.orbed.ts
 import { test } from 'orbed'
 
-export default [test('checkout persists', async ({ portals, db, services }) => {
+test('checkout persists', async ({ portals, db, services }) => {
   const shop = portals.get('shop')
   const orders = db.get('orders')
   const api = services.get('shop')
@@ -77,18 +73,17 @@ export default [test('checkout persists', async ({ portals, db, services }) => {
   await shop.expect('The confirmation shows three notebooks for $37.50.')
   await orders.expect('That order is stored with quantity three and total 3750 cents.')
   await api.expect('GET /orders with that customer’s x-customer header returns that order.')
-}, 180_000)]
+}, 180_000)
 ```
 
-Enable command access and describe the existing resources:
+Tell the agent how to inspect each resource in `orbed.config.ts` at the repository root:
 
 ```ts
-// .amp/plugins/orbed.ts
-import { orbed } from 'orbed/plugin'
-import tests from '../../tests/checkout.orbed.ts'
+// orbed.config.ts
+import { defineConfig } from 'orbed'
 
-export default orbed(tests, {
-  allowShell: true,
+export default defineConfig({
+  instructions: 'Disposable local checkout. No payments or external services.',
   databases: {
     orders: {
       service: 'shop',
@@ -101,31 +96,47 @@ export default orbed(tests, {
 })
 ```
 
-All handles support `action()` and `expect()`. Database/service-only tests need
-no browser. Select multiple portals with `portals.get(name)`; each preserves its
-own session. The callback's `expect(claim)` checks an application-wide outcome.
-Combine test files by importing their arrays and passing `[...checkout, ...other]`.
+### Two portals, two screen sizes
 
-## Execution and evidence
+An admin cancels an order and the customer sees it, on mobile and desktop. Each
+portal keeps its own browser session for the whole test.
 
-- Await operations sequentially. Each await waits for execution and fresh evidence;
-  a failed step stops later operations even if caught. Discarded `.then()` chains
-  cannot be detected—await calls directly.
-- Each test gets one agent and fresh browser sessions, **not fresh application or
-  database state**. Your setup owns fixtures and cleanup. Expectations must not
-  repair failures. IDs stay in agent context; operations return `Promise<void>`.
-- Reports and evidence live in `.orbed/<run-id>/`; Git-ignore `.orbed/`.
-  Contradictions are `failed`; uncertainty, timeout, callback, or cleanup errors
-  are `incomplete`. Only a completed all-passed suite passes.
-- Assessments are model judgments, not deterministic proof. Shell access is
-  unrestricted; resource guidance and browser-origin checks are not OS isolation.
-  Deadlines cannot undo side effects or guarantee termination of commands and
-  descendants. Crashes can leave orphaned work.
+```ts
+// tests/cancellation.orbed.ts
+import { test } from 'orbed'
 
-## Develop and calibrate
+for (const width of [390, 1280]) {
+  test(`cancellation reaches the customer at ${width}px`, async ({ portals, expect }) => {
+    const shop = portals.get('shop')
+    const admin = portals.get('admin')
 
-Framework tests use Bun 1.3.10+ against compiled `dist`; typechecking also covers
-acceptance tests and the plugin. These checks do not run paid agents:
+    await shop.action('Order two notebooks; retain the order ID.')
+    await admin.action('Find that order and cancel it.')
+    await shop.action('Open order history without signing out.')
+    await shop.expect('That order is shown as cancelled and no longer counts toward the total spent.')
+    await expect('The cancellation is visible to both the admin and the customer.')
+  }, { viewport: [width, 720], timeout: 300_000 })
+}
+```
+
+## Reference
+
+- **Test options:** `test(name, callback, options?)`, where `options` is
+  `{ viewport, timeout }` or a timeout in milliseconds.
+  - Defaults are 120 seconds and 1280 × 720 at 2× scale.
+  - Per step, use `await handle.expect('…', { timeoutMs: 30_000 })`.
+  - Test and step limits max out at ten minutes.
+- **Handles:** `portal`, `portals.get(name)`, `db.get(name)`, and
+  `services.get(name)` all have `action()` and `expect()`. The context's
+  top-level `expect(claim)` checks an app-wide outcome.
+- **Config:** `orbed.config.ts` is optional.
+  - `instructions` applies to every step.
+  - `databases` and `services` tell the agent how to inspect each resource.
+  - Tests run against the orb's existing Amp services and portals.
+
+## Develop
+
+Framework tests run the TypeScript source directly with Bun 1.3.10+ and don't run paid agents:
 
 ```sh
 npm ci --ignore-scripts
@@ -133,9 +144,11 @@ bun run test
 bun run typecheck
 ```
 
-The repository plugin runs [checkout](examples/shop.orbed.ts),
+This repository's own suite covers [counter](examples/counter.orbed.ts), [checkout](examples/shop.orbed.ts),
 [multiple portals](tests/portals.orbed.ts), and [service/database](tests/resources.orbed.ts)
-scenarios. Start Amp with `ORBED_INCLUDE_NEGATIVE_CONTROLS=1 amp` to also run
-[deliberate failures](tests/controls.orbed.ts); expect a non-passing suite.
-To inject incorrect checkout totals, write `total` to `.orbed/shop/fault`; restore
-`none` afterward. No service restart is needed.
+scenarios. To also run [deliberate failures](tests/controls.orbed.ts), start Amp
+with `ORBED_INCLUDE_NEGATIVE_CONTROLS=1 amp` and expect a non-passing suite.
+To inject wrong checkout totals, write `total` to `.orbed/shop/fault`, then
+restore `none`.
+
+[MIT](LICENSE)

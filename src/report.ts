@@ -1,5 +1,5 @@
-import type { Target, PortalURLs } from './portals.js'
-import type { Step } from './runtime.js'
+import type { Target, PortalURLs } from './portals.ts'
+import type { Step } from './runtime.ts'
 
 export type Assessment = {
   claim: string

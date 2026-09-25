@@ -24,7 +24,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc && tsc -p tsconfig.tests.json",
-    "test": "bun run build && bun test ./tests/*.test.ts",
+    "test": "bun test ./tests/*.test.ts",
     "prepack": "npm run build"
   },
   "dependencies": {
