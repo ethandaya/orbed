@@ -1,6 +1,5 @@
-import type { Target } from './index.js'
-
-export type Service = { name: string; publicURL?: string; baseURL?: string; port?: number; listening: boolean; health?: { ok: boolean } }
+export type Target = { kind: 'portal' | 'db' | 'service'; name: string }
+export type Service = { name: string; publicURL?: string; port?: number; listening: boolean; health?: { ok: boolean } }
 export type PortalURLs = Record<string, string>
 export type Database = { service: string; instructions: string }
 export type Resources = {

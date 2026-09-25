@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "rootDir": ".",
+    "types": ["bun", "node"]
+  },
+  "include": ["tests/**/*.ts", "examples/**/*.orbed.ts", ".amp/plugins/**/*.ts"]
+}

@@ -9,7 +9,7 @@ export default [
   }),
   test('missing evidence is incomplete', async ({ portals, expect }) => {
     await portals.get('portal-probe').action('Click Increment exactly once.')
-    await expect('The server persisted the new count to its production database.')
+    await expect('The latest backup in an external backup system completed successfully. That system is not connected to this orb and exposes no local evidence; do not access external systems or infer its state from this counter.')
   }),
   test('timeout is incomplete', async ({ portals }) => {
     const counter = portals.get('portal-probe')

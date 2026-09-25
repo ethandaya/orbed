@@ -1,8 +1,6 @@
 import { test } from 'orbed'
 
-export default [test('switching portals preserves the scenario', {
-  viewport: [390, 720], timeoutMs: 600_000,
-}, async ({ portals, db }) => {
+export default [test('switching portals preserves the scenario', async ({ portals, db }) => {
   const counter = portals.get('portal-probe')
   const shop = portals.get('shop')
   await counter.action('Click Increment exactly three times.')
@@ -12,4 +10,4 @@ export default [test('switching portals preserves the scenario', {
   await counter.action('Return to the counter without reloading it, then click Increment once.')
   await counter.expect('The count is now four, retaining the three increments from before visiting the shop.')
   await db.get('orders').expect('The order placed in the shop has a durable record with quantity two and the confirmed total.')
-})]
+}, { viewport: [390, 720], timeout: 600_000 })]

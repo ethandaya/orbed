@@ -1,5 +1,13 @@
-import type { PortalTest, Resource, Step, StepOptions, Target, TestContext } from './index.js'
+import type { PortalTest, Resource, StepOptions, TestContext } from './index.js'
+import type { Target } from './portals.js'
 import { withTimeout } from './timeout.js'
+
+export type Step = {
+  kind: 'action' | 'expect'
+  instruction: string
+  target?: Target
+  timeoutMs?: number
+}
 
 /** Own callback lifetime, sequential operations and a sticky failure gate. */
 export async function executeTest(

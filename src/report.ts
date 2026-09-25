@@ -1,5 +1,5 @@
-import type { Step, Target } from './index.js'
-import type { PortalURLs } from './portals.js'
+import type { Target, PortalURLs } from './portals.js'
+import type { Step } from './runtime.js'
 
 export type Assessment = {
   claim: string
@@ -21,7 +21,6 @@ export type Event = {
   screenshot?: string
   error?: string
   recoverable?: boolean
-  assertion?: number
   assessment?: Assessment
   command?: string
   stdout?: string
@@ -46,9 +45,6 @@ export type Report = {
   runID: string
   complete: boolean
   passed: boolean
-  revision: string
-  sourceHash: string
-  clean: boolean
   results: Result[]
   error?: string
 }
@@ -72,6 +68,8 @@ export async function persistTerminalReport(report: Report, signal: AbortSignal,
 /** Action citations describe steps; at least one captured observation must support a claim. */
 export function evidenceError(ids: number[], events: Event[], portals: PortalURLs, target?: Target, after = -1): string | undefined {
   if (!Array.isArray(ids) || !ids.length) return 'Cite at least one captured observation'
+  after = Math.max(after, events.findLastIndex(event =>
+    ['click', 'fill', 'press'].includes(event.action)))
   let observations = 0
   let fresh = false
   let targetObservation = target === undefined
@@ -109,6 +107,7 @@ export function evaluate(step: Step, events: Event[], portals: PortalURLs, start
   if (events.at(-1)?.action !== 'finish') return incomplete('Agent did not finish')
   const checks = events.slice(start).filter(e => e.action === 'check' && !e.error)
   if (checks.length !== 1) return incomplete('Missing or duplicate step assessment')
+  if (events.at(-2) !== checks[0]) return incomplete('Assessment must follow all step operations')
   for (const check of checks) {
     const assessment = check.assessment
     if (!assessment || assessment.claim !== step.instruction ||
@@ -124,28 +123,4 @@ export function evaluate(step: Step, events: Event[], portals: PortalURLs, start
   const uncertain = assessments.find(a => a.verdict === 'insufficient-evidence')
   const failed = assessments.find(a => a.verdict === 'contradicted')
   return { assessments, ...(uncertain ? incomplete(uncertain.reason) : failed ? { status: 'failed' as const, reason: failed.reason } : { status: 'passed' as const }) }
-}
-
-const sha = (value: unknown, length: number) => typeof value === 'string' && new RegExp(`^[a-f0-9]{${length}}$`).test(value)
-
-/** Fail closed for partial, inconsistent, or unsuccessful reports. */
-export function parseReport(value: unknown): Report {
-  if (!value || typeof value !== 'object') throw new Error('Invalid Orbed report')
-  const report = value as Report
-  if (report.schemaVersion !== 1 || typeof report.runID !== 'string' ||
-      typeof report.complete !== 'boolean' || typeof report.passed !== 'boolean' ||
-      typeof report.clean !== 'boolean' || !sha(report.revision, 40) || !sha(report.sourceHash, 64) ||
-      !Array.isArray(report.results) || (report.error !== undefined && typeof report.error !== 'string') ||
-      report.results.some(result => !result || typeof result.name !== 'string' || !['passed', 'failed', 'incomplete'].includes(result.status))) {
-    throw new Error('Invalid Orbed report')
-  }
-  const failed = report.error !== undefined || !report.complete || report.results.length === 0 || report.results.some(result => result.status !== 'passed')
-  if (report.passed !== !failed) throw new Error('Invalid Orbed report')
-  return report
-}
-
-/** Fail closed for partial, empty, or unsuccessful reports. */
-export function exitCode(report: Report): number {
-  return report.error === undefined && report.complete && report.passed && report.results.length > 0 &&
-    report.results.every(result => result.status === 'passed') ? 0 : 1
 }

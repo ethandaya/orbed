@@ -12,4 +12,7 @@ fi
 echo "[orb setup] installing locked npm dependencies"
 npm ci --ignore-scripts
 
+echo "[orb setup] building TypeScript"
+npm run build
+
 echo "[orb setup] complete in $((SECONDS - started_at))s"

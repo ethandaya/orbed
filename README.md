@@ -1,94 +1,86 @@
-# orbed 0.0.1
+# orbed
 
-Acceptance tests carried out by Amp agents in an orb. Describe an action, await
-its completion, then check the running app through its portals, databases and
-services. Orbed captures evidence and returns a test result.
+Write acceptance tests in plain language. Amp agents execute each awaited step
+and return results backed by screenshots, page snapshots, and command output.
 
-**Local MVP, not published.** A suite runs in the current orb and returns pass or fail.
+**Unpublished 0.0.1 · [MIT](LICENSE).** Bun-like authoring, Amp-owned execution:
+Orbed suites run through `orbed_run`, not `bun test`. No extra test registry,
+discovery system, hooks, or matcher library.
 
-## The core API
+Requires an [Amp orb](https://ampcode.com/docs/orbs), Node 22+, configured Amp
+services, and `agent-browser`/Chromium for browser tests. Use disposable data
+without production credentials. Agent runs consume Amp credits.
+
+## Start with one portal
+
+Until publication, build this checkout with `npm ci --ignore-scripts && npm run build`,
+then install it in your app with `npm install --save-dev /path/to/orbed`.
+
+```ts
+// tests/counter.orbed.ts
+import { test } from 'orbed'
+
+export default [test('increment', async ({ portal }) => {
+  await portal.action('Click Increment once.')
+  await portal.expect('The count increased by one.')
+})]
+```
+
+Register your tests in the app's plugin:
+
+```ts
+// .amp/plugins/orbed.ts
+import { orbed } from 'orbed/plugin'
+import tests from '../../tests/counter.orbed.ts'
+
+export default orbed(tests)
+```
+
+Configure the app's portal through Amp's normal service setup, ask Amp to reload
+the plugin, then ask: **“Run the Orbed suite using orbed_run.”**
+The `portal` shorthand requires exactly one configured portal.
+
+## Add viewports and deadlines
+
+The callback comes second; options or a timeout in milliseconds come third.
+Use ordinary JavaScript to generate cases:
 
 ```ts
 import { test } from 'orbed'
 
-export default [
-  test('checkout', async ({ portal, db, services }) => {
-    const orders = db.get('orders')
-    const mail = services.get('mail')
-
-    await portal.action('Order two notebooks.')
-    await portal.expect('The confirmation shows two notebooks at the advertised price.')
-    await orders.expect('That order is saved with the same ID, quantity and total.')
-    await mail.expect('One receipt for that order was accepted by the local mail service.', {
-      timeoutMs: 30_000,
-    })
-  }),
-]
+export default [390, 1280].map(width => test(`checkout at ${width}px`, async ({ portal }) => {
+  await portal.action('Order two notebooks.')
+  await portal.expect('The confirmation matches the advertised price.')
+}, { viewport: [width, 720], timeout: 180_000 }))
 ```
 
-This is executable authoring syntax, with illustrative application behavior.
-Every handle exposes `action(instruction, options?)` and `expect(claim, options?)`,
-both returning `Promise<void>`:
+`test(name, callback, 180_000)` sets only the timeout. Defaults: 120 seconds,
+1280 × 720, 2× screenshots. Per-step limits use
+`await portal.expect('The export is ready.', { timeoutMs: 30_000 })`.
+Test and step limits have a ten-minute maximum.
 
-- `portal` / `portals.get(name)` selects an existing Amp portal.
-- `db.get(name)` selects a database binding to an existing local resource.
-- `services.get(name)` selects an existing Amp service, including non-browser services.
-- The callback's `expect(claim)` checks an application-wide outcome.
+## Check the UI, storage, and service together
 
-You write outcomes, not selectors, SQL bindings or browser scripts. One Amp agent
-retains context and IDs across the entire test.
-Portal agents can navigate to absolute application paths such as `/orders/123`.
-Orbed rejects explicitly cross-origin paths, restricts browser traffic to the
-portal hostname and fails the step if the final URL leaves the portal origin.
-This is browser-level containment, not an operating-system network boundary.
-
-## Await means execution, not declaration
-
-`test(...)` registers a callback without running it. During a suite, Orbed invokes
-that callback once. Each call sends **only its current step** to the agent and
-waits for fresh evidence, a supported assessment and the end of the agent's turn.
-Only then does JavaScript continue past `await`.
+Named handles select existing Amp resources. This example uses the repository's
+disposable `shop` service and JSON order store; adapt bindings to your app.
 
 ```ts
-test('prepare and process an order', async ({ db, services, expect }) => {
-  const orders = db.get('orders')
-  const worker = services.get('worker')
+// tests/checkout.orbed.ts
+import { test } from 'orbed'
 
-  await orders.action('Insert one pending order for the disposable test customer; retain its ID.')
-  await worker.action('Process that pending order using the existing local job endpoint.')
-  await orders.expect('That order is marked processed.')
-  await expect('The worker result and stored order agree on the order ID and total.')
-})
+export default [test('checkout persists', async ({ portals, db, services }) => {
+  const shop = portals.get('shop')
+  const orders = db.get('orders')
+  const api = services.get('shop')
+
+  await shop.action('Order three notebooks; retain the order and customer IDs.')
+  await shop.expect('The confirmation shows three notebooks for $37.50.')
+  await orders.expect('That order is stored with quantity three and total 3750 cents.')
+  await api.expect('GET /orders with that customer’s x-customer header returns that order.')
+}, 180_000)]
 ```
 
-Actions may change disposable runtime data as explicitly requested. Expectations
-inspect it; they must not repair the app to make a claim pass. Actions also need
-evidence of completion—starting a background job is not the same as finishing it.
-
-Normal JavaScript awaits, loops and branches can run between calls. Handles
-return no model-generated data; use IDs retained in the agent's context or values
-your own callback obtains. Callback code runs in the plugin host; resolve file
-paths relative to `import.meta.url` rather than assuming a repository working
-directory. Instrumented agent commands do run from the repository root.
-All Orbed operations must be awaited sequentially.
-Overlapping calls (`Promise.all`) and a bare discarded operation fail the test,
-even if that operation already finished. `handle.then(...)` adopts the promise, so
-a discarded chain is not detectable. Await the call directly.
-A failed action or expectation rejects, blocks later Orbed operations,
-and remains a failure even if the callback catches its exception.
-
-`timeoutMs` on a call bounds that step; the test's deadline bounds the entire
-callback, including time spent outside Orbed calls. A timeout rejects the outstanding
-Orbed await, stops new tool work and triggers cancellation/cleanup. Other JavaScript promises and already-running
-commands cannot be forcibly undone: arbitrary callback code must be cooperative,
-and a synchronous infinite loop can block the host. Do not use these deadlines as
-a transaction rollback or a hard spend limit.
-
-## Reuse Amp's setup
-
-**Amp owns the environment; Orbed binds to it.** Keep dependency installation,
-service startup, fixtures, disposable databases and test accounts in the existing
-orb setup. Orbed uses Amp's service readiness output, not a second service manifest.
+Enable command access and describe the existing resources:
 
 ```ts
 // .amp/plugins/orbed.ts
@@ -99,183 +91,51 @@ export default orbed(tests, {
   allowShell: true,
   databases: {
     orders: {
-      service: 'postgres',
-      instructions: 'Use the existing local test database via psql. Orders are in public.orders. Use the test connection already configured by orb setup; never print credentials.',
+      service: 'shop',
+      instructions: 'Read .orbed/shop/orders/<order-id>.json. Fields: id, customer, quantity, totalCents, status.',
     },
   },
   services: {
-    mail: {
-      instructions: 'The existing local mail sink exposes its request journal at /requests. Match receipts by order ID.',
-    },
-    worker: {
-      instructions: 'The local worker exposes POST /jobs to process an order ID and GET /jobs/:id for completion and result data.',
-    },
+    shop: { instructions: 'GET /orders accepts an x-customer header and returns that customer’s orders.' },
   },
-  instructions: 'Use only disposable local services and test accounts. Never access shared or production resources.',
 })
 ```
 
-These names, schema details and endpoints are examples; use the ones your project
-already provides. Service handles resolve directly from Amp service names. Their
-`services` entries add optional inspection guidance, not startup configuration.
-Database bindings require an existing Amp `service` and `instructions`, because
-Amp's service discovery does not identify database names or schemas. For SQLite
-or a document store, bind to the owning app service and describe the local file
-and available client. No connections or credentials are guessed.
+All handles support `action()` and `expect()`. Database/service-only tests need
+no browser. Select multiple portals with `portals.get(name)`; each preserves its
+own session. The callback's `expect(claim)` checks an application-wide outcome.
+Combine test files by importing their arrays and passing `[...checkout, ...other]`.
 
-`portal` shorthand requires exactly one configured portal. With several, select
-`portals.get('shop')`. Only service-configured portals are discovered, not ad-hoc
-portals. Every handle lookup checks its binding and service readiness; missing,
-ambiguous or unavailable resources fail clearly and are never substituted.
+## Execution and evidence
 
-**Dynamic callbacks cannot be preflighted as a whole without executing them.**
-Lookups validate when JavaScript reaches them, including those in later branches.
-Select known handles at the top of a callback to fail before any actions. The
-test agent is created lazily for the first operation. Readiness is the snapshot
-obtained at suite start; runtime failures still require fresh evidence.
+- Await operations sequentially. Each await waits for execution and fresh evidence;
+  a failed step stops later operations even if caught. Discarded `.then()` chains
+  cannot be detected—await calls directly.
+- Each test gets one agent and fresh browser sessions, **not fresh application or
+  database state**. Your setup owns fixtures and cleanup. Expectations must not
+  repair failures. IDs stay in agent context; operations return `Promise<void>`.
+- Reports and evidence live in `.orbed/<run-id>/`; Git-ignore `.orbed/`.
+  Contradictions are `failed`; uncertainty, timeout, callback, or cleanup errors
+  are `incomplete`. Only a completed all-passed suite passes.
+- Assessments are model judgments, not deterministic proof. Shell access is
+  unrestricted; resource guidance and browser-origin checks are not OS isolation.
+  Deadlines cannot undo side effects or guarantee termination of commands and
+  descendants. Crashes can leave orphaned work.
 
-Database and service operations require `allowShell: true`. The agent uses local
-commands to inspect or operate the bound resource. Evidence records the host-owned
-resource identity and step number. **Shell access is unrestricted, not an enforced
-read-only sandbox.** Resource guidance and action/expectation rules are instructions,
-not filesystem/network isolation. Attribution does not prove a command accessed
-only that resource. Use trusted repositories and disposable orbs without production
-credentials; avoid secrets in command output.
+## Develop and calibrate
 
-## Multiple portals and a database
-
-```ts
-test('an administrator can cancel an order', async ({ portals, db }) => {
-  const shop = portals.get('shop')
-  const admin = portals.get('admin')
-  const orders = db.get('orders')
-
-  await shop.action('Place an order for two notebooks.')
-  await shop.expect('The order is confirmed.')
-  await admin.action('Find that order and cancel it.')
-  await admin.expect('That order is cancelled.')
-  await shop.action('Reload the order history.')
-  await shop.expect('That same order is cancelled.')
-  await orders.expect('A fresh read shows that order cancelled, without changing other orders.')
-})
-```
-
-Each portal retains its own browser session when switching away and back; cookies
-are not shared. Each test gets fresh browser sessions, **not a fresh database or
-application**. Fixture creation, isolation and data cleanup remain the project's
-responsibility. A DB-only or service-only test does not need a portal or browser.
-
-## Background jobs and service-call checks
-
-```ts
-test('an export produces a file and one notification', {
-  timeoutMs: 240_000,
-}, async ({ portals, db, services }) => {
-  const dashboard = portals.get('dashboard')
-  const orders = db.get('orders')
-  const worker = services.get('worker')
-  const mail = services.get('mail')
-
-  await dashboard.action('Request an export of my current orders; retain the job ID.')
-  await worker.expect('That job is completed and its export file exists.', { timeoutMs: 90_000 })
-  await orders.expect('The exported order IDs match this account’s saved orders, with no other account’s orders included.')
-  await mail.expect('Exactly one export-ready notification was recorded for that job, with no duplicate during the ten seconds following job completion.', {
-    timeoutMs: 30_000,
-  })
-  await dashboard.action('Refresh the exports page.')
-  await dashboard.expect('That export is available to download.')
-})
-```
-
-For eventual outcomes, instruct the agent to observe until completion within the
-step deadline. There is no automatic retry of an action or failed assessment.
-The agent chooses polling commands; each command has a twenty-second limit.
-
-Spy-like checks use real instrumentation such as a local request journal. The
-app's setup must route external calls to a disposable sink and record correlation
-IDs, payloads and timestamps. Orbed does not intercept requests or fabricate a
-spy. “No duplicate” requires a bounded observation window and a complete journal;
-an absent log line alone is not proof. No real mail or payments should be sent.
-
-## Run with Amp
-
-Use an Amp orb with Node 22+, Amp's plugin API and `agent-browser`/Chromium for
-portal tests. Reload the plugin after changes, then ask Amp:
-
-> Run the Orbed suite using orbed_run and show the recorded results.
-
-The runner invokes callbacks, sends one step per agent turn, records results,
-closes test browsers and archives each child thread once the test ends. It does
-not archive between awaited calls. The interactive thread and app services remain
-open. No human portal viewer or `agent: control` configuration is needed.
-
-Test options: `test(name, { viewport: [390, 720], timeoutMs: 240_000 }, callback)`.
-Defaults are 1280 × 720, 2× screenshots and a 120-second test deadline. Test and
-step deadlines have a ten-minute maximum. Cleanup adds bounded time: cancellation
-ten seconds, each browser-close/archive command twenty seconds. Service setup has
-a ninety-second limit; child creation has a twenty-second limit. Process crashes
-can still leave orphaned work; crash recovery is not implemented.
-
-## Evidence and results
-
-Each action or expectation receives `supported`, `contradicted` or
-`insufficient-evidence`, with a reason and evidence IDs. Portal steps require
-fresh screenshots/page snapshots from their portal; database and service steps
-require fresh command observations attributed to their resource. Evidence from a
-previous step or another resource alone cannot satisfy them. Application-wide
-expectations can use browser or command evidence.
-
-Only a complete, all-passed suite opens the gate. Contradiction fails the test;
-uncertainty, missing evidence, timeout, callback errors and cleanup failures make
-it incomplete. Both block the gate. A false claim stops the callback rather than
-continuing to its later steps. Invalid citations can be corrected within the same
-step; recovering a browser-target mistake requires retry and a fresh observation.
-
-**Assessments remain model judgments, not deterministic proof.** Orbed validates
-step boundaries and evidence references, not semantic correctness. Review the
-captured observations and calibrate against known failures before relying on it.
-
-Ignore `.orbed/` in Git. Each `.orbed/<run-id>/` contains a report and per-test
-evidence with executed steps, resource attribution, thread IDs, screenshots,
-commands, assessments and archival status. Callback functions are not serialized.
-The report records Git HEAD and a source hash; source changes during the suite
-invalidate it. Ignored builds/dependencies, environment and runtime data are not
-covered. Reports are local evidence, not signed attestations.
-
-```sh
-orbed check .orbed/<run-id>/report.json
-```
-
-Exit codes: **0** passed, **1** failed/incomplete, **2** invalid report.
-`check` reads a saved report; it does not rerun tests. A report must be internally
-consistent: `passed` is true only when the suite completed without error and every
-result passed. No Git hook or push authorization is installed.
-
-## Develop and migrate
+Framework tests use Bun 1.3.10+ against compiled `dist`; typechecking also covers
+acceptance tests and the plugin. These checks do not run paid agents:
 
 ```sh
 npm ci --ignore-scripts
-npm test
-npm run typecheck
-npm pack
-# In another project:
-npm install /path/to/orbed-0.0.1.tgz
+bun run test
+bun run typecheck
 ```
 
-Publication is disabled with `private: true`. This is a Vitest-like API, not a
-Vitest plugin. There are no describe blocks, lifecycle hooks, watch mode, automatic
-test discovery or automatic retries. Live agent runs consume Amp credits.
-
-**Migration from the earlier 0.0.1 spike:** add `async` to test callbacks and
-`await` to every action/expectation. Replace whole-app DB/service prose with named
-handles when resource-specific command evidence is required. Add database bindings
-and service guidance to the plugin, referring to existing orb setup. Callbacks now
-run during execution, not import; they cannot be inspected as a static plan.
-
-The included shop uses a JSON document store, not SQL. `tests/resources.orbed.ts`
-exercises real service requests and database actions, with independent reads
-inside the callback immediately after `await`. `tests/portals.orbed.ts` covers
-multi-portal state. `examples/shop.orbed.ts` covers desktop/narrow checkout and
-cancellation isolation. `tests/controls.orbed.ts` contains deliberately failing
-claims and deadlines. SQL, worker and mail examples above require your own
-application and setup; those integrations are not bundled fixtures.
+The repository plugin runs [checkout](examples/shop.orbed.ts),
+[multiple portals](tests/portals.orbed.ts), and [service/database](tests/resources.orbed.ts)
+scenarios. Start Amp with `ORBED_INCLUDE_NEGATIVE_CONTROLS=1 amp` to also run
+[deliberate failures](tests/controls.orbed.ts); expect a non-passing suite.
+To inject incorrect checkout totals, write `total` to `.orbed/shop/fault`; restore
+`none` afterward. No service restart is needed.
