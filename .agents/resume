@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# This repository has no authentication or runtime resources to repair on wake.
+exit 0
