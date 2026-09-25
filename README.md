@@ -9,7 +9,7 @@ It replaces one-off “test this in the orb” prompts and can take over some ex
 Give Amp this prompt from your project:
 
 ```text
-Set up orbed from https://github.com/ethandaya/orbed. Run `npm install -D orbed`, create `.amp/plugins/orbed.ts` containing `export { default } from 'orbed/plugin'`, and add a minimal `*.orbed.ts` test for this app's primary flow. Configure any needed Amp portal and disposable test-state reset.
+Set up orbed in this project. Run `npm install -D orbed`, create `.amp/plugins/orbed.ts` containing `export { default } from 'orbed/plugin'`, and add a minimal `*.orbed.ts` test for this app's primary flow. Configure any needed Amp portal and disposable test-state reset.
 ```
 
 ## Write a test
