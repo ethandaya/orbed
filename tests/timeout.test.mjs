@@ -29,3 +29,20 @@ test('a late SDK rejection after timeout is still handled', async () => {
   reject(new Error('late transport failure'))
   await new Promise(resolve => setImmediate(resolve))
 })
+
+test('abort stops waiting for an underlying operation that does not settle', async () => {
+  const controller = new AbortController()
+  const wait = withTimeout(new Promise(() => {}), 60_000, 'Upload', controller.signal)
+  controller.abort(new Error('suite cancelled'))
+  await assert.rejects(wait, /suite cancelled/)
+})
+
+test('a pre-aborted wait still observes a later operation rejection', async () => {
+  const controller = new AbortController()
+  controller.abort(new Error('already cancelled'))
+  let reject
+  const operation = new Promise((_, fail) => { reject = fail })
+  await assert.rejects(withTimeout(operation, 60_000, 'Upload', controller.signal), /already cancelled/)
+  reject(new Error('late upload failure'))
+  await new Promise(resolve => setImmediate(resolve))
+})

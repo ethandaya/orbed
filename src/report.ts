@@ -14,10 +14,12 @@ export type Event = {
   resource?: Target
   portal?: string
   url?: string
+  path?: string
   selector?: string
   text?: string
   snapshot?: string
   screenshot?: string
+  screenshotURL?: string
   error?: string
   recoverable?: boolean
   assertion?: number
@@ -39,6 +41,7 @@ export type Result = {
   assessments?: Assessment[]
   steps?: (Step & { status: Status; reason?: string })[]
   durationMs?: number
+  artifacts?: { evidenceURL: string; screenshotURLs: string[] }
 }
 export type Report = {
   schemaVersion: 1
@@ -50,6 +53,22 @@ export type Report = {
   clean: boolean
   results: Result[]
   error?: string
+}
+
+/** Persist terminal state without allowing cancellation during the write to return a passing report. */
+export async function persistTerminalReport(report: Report, signal: AbortSignal, save: () => Promise<void>): Promise<void> {
+  let cancellationRecorded = false
+  const recordCancellation = () => {
+    if (!signal.aborted || cancellationRecorded) return false
+    cancellationRecorded = true
+    report.complete = false
+    report.passed = false
+    report.error = String(signal.reason ?? new Error('Orbed suite cancelled'))
+    return true
+  }
+  recordCancellation()
+  await save()
+  if (recordCancellation()) await save()
 }
 
 /** Action citations describe steps; at least one captured observation must support a claim. */
@@ -64,7 +83,7 @@ export function evidenceError(ids: number[], events: Event[], portals: PortalURL
     const command = event.action === 'command' && !!event.command &&
       typeof event.stdout === 'string' && typeof event.stderr === 'string' && Number.isInteger(event.exitCode)
     const url = event.portal === undefined ? undefined : portals[event.portal]
-    const browser = ['open', 'snapshot'].includes(event.action) && event.snapshot && event.screenshot &&
+    const browser = ['open', 'navigate', 'snapshot'].includes(event.action) && event.snapshot && event.screenshot &&
       url && event.url && new URL(event.url).origin === new URL(url).origin
     if (id > after && ((browser && target?.kind === 'portal' && event.portal === target.name) ||
         (command && target?.kind !== 'portal' && event.resource?.kind === target?.kind && event.resource?.name === target?.name))) targetObservation = true

@@ -9,6 +9,15 @@ export type Resources = {
 }
 export type Binding = { target: Target; instructions: string; url?: string }
 
+/** Reject an explicitly cross-origin path before asking the browser to navigate. */
+export function portalPathURL(portalURL: string, path: unknown): string {
+  if (typeof path !== 'string' || !path.startsWith('/')) throw new Error('Navigate requires an absolute application path')
+  const portal = new URL(portalURL)
+  const destination = new URL(path, portal)
+  if (destination.origin !== portal.origin) throw new Error('Navigate cannot leave the declared portal')
+  return destination.href
+}
+
 /** Bind to Amp's running services; never create or guess a resource. */
 export function resolveResource(target: Target, services: Service[], resources: Resources, allowShell: boolean): Binding {
   let name = target.name

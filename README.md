@@ -38,6 +38,10 @@ both returning `Promise<void>`:
 
 You write outcomes, not selectors, SQL bindings or browser scripts. One Amp agent
 retains context and IDs across the entire test.
+Portal agents can navigate to absolute application paths such as `/orders/123`.
+Orbed rejects explicitly cross-origin paths, restricts browser traffic to the
+portal hostname and fails the step if the final URL leaves the portal origin.
+This is browser-level containment, not an operating-system network boundary.
 
 ## Await means execution, not declaration
 
@@ -252,17 +256,28 @@ hook or push authorization is installed. Run a fresh suite before pushing.
 
 ```sh
 # Supply AMP_API_KEY through the CI secret store.
-orbed run --project team/app --revision "$GITHUB_SHA" --output orbed-report.json
+orbed run --project team/app --revision "$GITHUB_SHA" \
+  --output orbed-report.json --artifacts orbed-artifacts
 ```
 
 The SDK creates an orb and prompts Amp to call `orbed_run`, consuming the correlated
 tool result rather than assistant prose. The project must already contain this
 library, plugin, tests and working setup at the requested clean commit.
 `--revision` validates; it does not select a branch or upload local work.
+When `--artifacts` is set, each test's evidence manifest and screenshots are
+uploaded by the plugin and immediately downloaded into the named directory along
+with a copy of the report. Treat URLs retained in the report as credentials that
+may expire; publish the downloaded directory through the CI provider's artifact
+mechanism rather than relying on those URLs later. The directory must not already
+exist; malformed or partial bundles are rejected and removed.
 Fresh-orb end-to-end execution is unverified; do not use it as a required release
 gate yet. The remote wait defaults to fifteen minutes (`--timeout-ms`, maximum
-one hour). Abort is not a verified server-side cancellation or spend cap.
-Automatic artifact download and guaranteed remote-abort archival are not included.
+one hour). Aborting the SDK process propagates cancellation to Amp; the plugin
+also cancels child work when either the parent tool or parent turn is cancelled.
+Guaranteed server-side cancellation and archival after a network partition remain
+unverified, so the timeout is not a hard spend cap. Individual evidence uploads
+are bounded to twenty seconds and stop blocking Orbed when the suite is cancelled;
+the attachment API does not expose cancellation for an upload already in flight.
 
 ## Develop and migrate
 

@@ -26,6 +26,7 @@ else exit 1; fi
   let resumed = false
   let lateTool
   let callbackReturned = false
+  let uploads = 0
   const tools = new Map()
   const hooks = new Map()
   const tests = [
@@ -53,6 +54,11 @@ else exit 1; fi
     system: { workspaceRoot: `file://${process.cwd()}` }, helpers: { filePathFromURI: () => process.cwd() },
     registerTool: tool => tools.set(tool.name, tool),
     on: (name, fn) => hooks.set(name, fn),
+    attachments: { upload: async ({ data, mimeType }) => {
+      assert.equal(mimeType, 'application/json')
+      assert.ok(data.length > 0)
+      return { url: `https://artifacts.example/${++uploads}` }
+    } },
     createAgent: () => ({ createThread: async () => {
       const id = `T-test-${++children}`
       return {
@@ -81,7 +87,7 @@ else exit 1; fi
       }
     } }),
   })
-  const report = JSON.parse(await tools.get('orbed_run').execute({}, { thread: { id: 'T-parent' } }))
+  const report = JSON.parse(await tools.get('orbed_run').execute({ artifacts: true }, { thread: { id: 'T-parent' } }))
   assert.equal(report.error, undefined)
   assert.equal(report.complete, true)
   assert.deepEqual(report.results.map(r => r.status), ['passed', 'failed', 'incomplete', 'incomplete', 'incomplete'])
@@ -92,6 +98,9 @@ else exit 1; fi
   assert.equal(turns, 5)
   assert.equal(await archiveCount(), 4)
   assert.equal(report.results.slice(0, 4).every(r => r.archived), true)
+  assert.equal(report.results.every(r => r.artifacts?.evidenceURL.startsWith('https://artifacts.example/')), true)
+  assert.equal(report.results.every(r => r.artifacts?.screenshotURLs.length === 0), true)
+  assert.equal(uploads, report.results.length)
   assert.equal(callbackReturned, true)
   assert.ok(cancelled >= 1)
   await assert.rejects(lateTool(), /No active step/)
@@ -155,7 +164,11 @@ else exit 1; fi
     const running = tools.get('orbed_run').execute({}, { thread: { id: 'T-cancel-parent' } })
     if (delayedAppend) await waitFor(() => submitted)
     else await waitFor(() => readFile(join(bin, 'archiving')).then(() => true, () => false))
-    await hooks.get('tool.result')({ thread: { id: 'T-cancel-parent' }, tool: 'orbed_run', toolUseID: 'cancel', status: 'cancelled' })
+    if (delayedAppend) {
+      await hooks.get('agent.end')({ thread: { id: 'T-cancel-parent' }, message: 'cancelled', status: 'cancelled' })
+    } else {
+      await hooks.get('tool.result')({ thread: { id: 'T-cancel-parent' }, tool: 'orbed_run', toolUseID: 'cancel', status: 'cancelled' })
+    }
     await rm(hold, { force: true })
     const report = JSON.parse(await running)
     assert.equal(report.passed, false)
@@ -171,4 +184,53 @@ else exit 1; fi
       await assert.rejects(tools.get('orbed_command').execute({ command: 'printf late' }, { thread: { id: 'T-cancel-child' } }), /No idle active step/)
     }
   })
+})
+
+check('cancellation stops waiting for an artifact upload that does not settle', { timeout: 10_000 }, async t => {
+  const bin = await mkdtemp(join(tmpdir(), 'orbed-upload-cancel-'))
+  const previousPath = process.env.PATH
+  await writeFile(join(bin, 'amp'), `#!/bin/sh
+if [ "$1" = orb ]; then
+  printf '%s' '{"services":[{"name":"store","listening":true,"port":8080}]}'
+elif [ "$1" = threads ] && [ "$2" = archive ]; then
+  exit 0
+else exit 1; fi
+`, { mode: 0o755 })
+  process.env.PATH = `${bin}:${previousPath}`
+  t.after(async () => { process.env.PATH = previousPath; await rm(bin, { recursive: true, force: true }) })
+
+  const tools = new Map()
+  const hooks = new Map()
+  let uploadStarted
+  const uploading = new Promise(resolve => { uploadStarted = resolve })
+  orbed([test('upload cancellation', async ({ services }) => {
+    await services.get('store').expect('The service is ready')
+  })], { allowShell: true })({
+    system: { workspaceRoot: `file://${process.cwd()}` }, helpers: { filePathFromURI: () => process.cwd() },
+    registerTool: tool => tools.set(tool.name, tool),
+    on: (name, fn) => hooks.set(name, fn),
+    attachments: { upload: async () => {
+      uploadStarted()
+      return new Promise(() => {})
+    } },
+    createAgent: () => ({ createThread: async () => ({
+      id: 'T-upload-child', cancel: async () => {},
+      appendUserMessage: async ({ content }) => {
+        const ctx = { thread: { id: 'T-upload-child' } }
+        const record = JSON.parse(await tools.get('orbed_command').execute({ command: 'printf ready' }, ctx))
+        await tools.get('orbed_browser').execute({ action: 'check', verdict: 'supported', reason: 'ready', evidence: [record.id] }, ctx)
+        await tools.get('orbed_browser').execute({ action: 'finish' }, ctx)
+        await hooks.get('agent.end')({ ...ctx, message: content, status: 'done' })
+      },
+    }) }),
+  })
+
+  const running = tools.get('orbed_run').execute({ artifacts: true }, { thread: { id: 'T-upload-parent' } })
+  await uploading
+  await hooks.get('tool.result')({ thread: { id: 'T-upload-parent' }, tool: 'orbed_run', toolUseID: 'cancel', status: 'cancelled' })
+  const report = JSON.parse(await running)
+  assert.equal(report.complete, false)
+  assert.equal(report.passed, false)
+  assert.match(report.error, /cancelled/)
+  assert.equal(report.results[0].artifacts, undefined)
 })

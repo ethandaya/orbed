@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { test } from '../dist/index.js'
 import { executeTest } from '../dist/runtime.js'
 import { orbed } from '../dist/plugin.js'
-import { evaluate, evidenceError, exitCode } from '../dist/report.js'
-import { resolveResource } from '../dist/portals.js'
+import { evaluate, evidenceError, exitCode, persistTerminalReport } from '../dist/report.js'
+import { portalPathURL, resolveResource } from '../dist/portals.js'
 
 const portal = { kind: 'portal', name: 'shop' }
 const db = { kind: 'db', name: 'orders' }
@@ -165,6 +165,14 @@ check('bindings use existing Amp services and fail on absent, ambiguous or unava
   assert.throws(() => resolve({ kind: 'portal', name: '' }, [...configured, { name: 'admin', publicURL: urls.admin, listening: true }]), /ambiguous/)
 })
 
+check('portal paths resolve within their declared portal only', () => {
+  assert.equal(portalPathURL(urls.shop, '/event/example?quantity=2'), 'https://shop.onamp.dev/event/example?quantity=2')
+  assert.throws(() => portalPathURL(urls.shop, 'event/example'), /absolute application path/)
+  assert.throws(() => portalPathURL(urls.shop, '//example.com/event/example'), /cannot leave/)
+  assert.equal(evidenceError([0], [{ action: 'navigate', portal: 'shop', url: 'https://shop.onamp.dev/event/example',
+    snapshot: 'Example event', screenshot: 'event.png' }], urls, portal), undefined)
+})
+
 check('missing resources fail at selection without starting an operation', async () => {
   let operations = 0
   await assert.rejects(executeTest(test('missing', async ({ db }) => {
@@ -238,15 +246,35 @@ check('recoverable targets and rejected citations still require correction', () 
 check('shell is opt-in and incomplete suites cannot pass', () => {
   for (const allowShell of [false, true]) {
     const tools = []
+    let browserTool
     orbed([test('example', async () => {})], { allowShell })({
       system: { workspaceRoot: 'file:///tmp/orbed' }, helpers: { filePathFromURI: () => '/tmp/orbed' },
-      createAgent: () => ({}), on() {}, registerTool: tool => tools.push(tool.name),
+      createAgent: () => ({}), on() {}, registerTool: tool => {
+        tools.push(tool.name)
+        if (tool.name === 'orbed_browser') browserTool = tool
+      },
     })
     assert.equal(tools.includes('orbed_command'), allowShell)
+    assert.ok(browserTool.inputSchema.properties.action.enum.includes('navigate'))
+    assert.equal(browserTool.inputSchema.properties.path.type, 'string')
   }
   const report = { complete: true, passed: true, results: [{ status: 'passed' }] }
   assert.equal(exitCode(report), 0)
   for (const patch of [{ complete: false }, { passed: false }, { error: 'timeout' }, { results: [] }, { results: [{ status: 'failed' }] }]) {
     assert.equal(exitCode({ ...report, ...patch }), 1)
   }
+})
+
+check('cancellation during terminal persistence cannot leave a passing report', async () => {
+  const controller = new AbortController()
+  const terminal = { complete: true, passed: true, results: [{ status: 'passed' }] }
+  let writes = 0
+  await persistTerminalReport(terminal, controller.signal, async () => {
+    writes++
+    if (writes === 1) controller.abort(new Error('cancelled during write'))
+  })
+  assert.equal(writes, 2)
+  assert.equal(terminal.complete, false)
+  assert.equal(terminal.passed, false)
+  assert.match(terminal.error, /cancelled during write/)
 })
