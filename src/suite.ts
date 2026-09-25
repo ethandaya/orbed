@@ -64,6 +64,9 @@ export async function loadSuite(root: string): Promise<Suite> {
     for (const file of testFiles) await import(pathToFileURL(file).href)
   })
   if (typeof config !== 'object' || config === null) throw new Error(`${CONFIG_FILE} must export a config object`)
+  if ('beforeEach' in config && (typeof config.beforeEach !== 'string' || !config.beforeEach.trim())) {
+    throw new Error(`${CONFIG_FILE} beforeEach must be a non-empty command string`)
+  }
   if (!tests.length) {
     throw new Error(`No tests registered by ${testFiles.map(file => relative(root, file)).join(', ')}. Call test() from 'orbed', and check that only one copy of orbed is installed.`)
   }

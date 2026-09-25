@@ -2,7 +2,11 @@ import type { Resources } from './portals.ts'
 import { register } from './registry.ts'
 
 export type StepOptions = { timeoutMs?: number }
-export type Config = Resources & { instructions?: string }
+export type Config = Resources & {
+  instructions?: string
+  /** Host-run command that prepares isolated disposable state before every test. */
+  beforeEach?: string
+}
 
 /** Type-check orbed.config.ts. The plugin loads it fresh on every run. */
 export function defineConfig(config: Config): Config {

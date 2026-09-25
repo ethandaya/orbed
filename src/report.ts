@@ -1,5 +1,7 @@
 import type { Target, PortalURLs } from './portals.ts'
 import type { Step } from './runtime.ts'
+import { readFile, writeFile } from 'node:fs/promises'
+import { dirname, relative } from 'node:path'
 
 export type Assessment = {
   claim: string
@@ -28,6 +30,13 @@ export type Event = {
   exitCode?: number
 }
 export type Status = 'passed' | 'failed' | 'incomplete'
+export type SetupResult = {
+  command: string
+  stdout: string
+  stderr: string
+  exitCode?: number
+  error?: string
+}
 export type Result = {
   name: string
   status: Status
@@ -38,6 +47,7 @@ export type Result = {
   evidence?: string
   assessments?: Assessment[]
   steps?: (Step & { status: Status; reason?: string })[]
+  setup?: SetupResult
   durationMs?: number
 }
 export type Report = {
@@ -46,7 +56,100 @@ export type Report = {
   complete: boolean
   passed: boolean
   results: Result[]
+  reportPath: string
   error?: string
+}
+
+type Evidence = { events?: Event[] }
+
+const label = (status: Status) => status === 'passed' ? 'PASS' : status === 'failed' ? 'FAIL' : 'INCOMPLETE'
+const block = (value: string) => value.trim() ? value.trim().split('\n').map(line => `    ${line}`).join('\n') : '    (empty)'
+
+/** Write the review artifact: claims, verdicts and the exact observations cited for them. */
+export async function writeMarkdownReport(report: Report): Promise<void> {
+  const passed = report.results.filter(result => result.status === 'passed').length
+  const failed = report.results.filter(result => result.status === 'failed').length
+  const incomplete = report.results.filter(result => result.status === 'incomplete').length
+  const lines = [
+    `# orbed run: ${report.passed ? 'PASS' : 'FAIL'}`,
+    '',
+    `Run: \`${report.runID}\``,
+    `Tests: ${passed} passed, ${failed} failed, ${incomplete} incomplete`,
+    `Complete: ${report.complete ? 'yes' : 'no'}`,
+    '',
+  ]
+  if (report.error) lines.push(`Suite error: ${report.error}`, '')
+  for (const result of report.results) {
+    lines.push(`## ${label(result.status)} — ${result.name}`, '')
+    if (result.durationMs !== undefined) lines.push(`Duration: ${(result.durationMs / 1000).toFixed(1)}s`, '')
+    if (result.reason) lines.push(`Reason: ${result.reason}`, '')
+    if (result.setup) {
+      lines.push('### Setup', '', `Command: \`${result.setup.command}\``, `Exit: ${result.setup.exitCode ?? 'error'}`, '')
+      if (result.setup.stdout.trim()) lines.push('Output:', '', block(result.setup.stdout), '')
+      if (result.setup.stderr.trim()) lines.push('Error output:', '', block(result.setup.stderr), '')
+    }
+    let evidence: Evidence = {}
+    if (result.evidence) {
+      evidence = JSON.parse(await readFile(result.evidence, 'utf8')) as Evidence
+      const path = relative(dirname(report.reportPath), result.evidence).replaceAll('\\', '/')
+      lines.push(`[Raw evidence](${path})`, '')
+    }
+    let assessmentIndex = 0
+    for (const [stepIndex, step] of (result.steps ?? []).entries()) {
+      lines.push(`### ${stepIndex + 1}. ${label(step.status)} — ${step.kind}`, '', step.instruction, '')
+      if (step.reason) lines.push(`Reason: ${step.reason}`, '')
+      const recorded = step.kind === 'expect' ? result.assessments?.[assessmentIndex++] : undefined
+      const assessment = evidence.events?.find(event => event.step === stepIndex && event.action === 'check' && !event.error)?.assessment ?? recorded
+      if (!assessment) continue
+      lines.push(`Verdict: **${assessment.verdict}**`, '', assessment.reason, '', 'Evidence:', '')
+      for (const id of assessment.evidence) {
+        const event = evidence.events?.[id]
+        if (!event) {
+          lines.push(`- Event ${id} (missing from evidence file)`)
+          continue
+        }
+        if (event.screenshot) {
+          const path = relative(dirname(report.reportPath), event.screenshot).replaceAll('\\', '/')
+          lines.push(`- [Screenshot from ${event.portal ?? 'portal'} event ${id}](${path})${event.url ? ` — ${event.url}` : ''}`)
+        } else if (event.action === 'command') {
+          lines.push(`- Command event ${id}: \`${event.command}\` (exit ${event.exitCode})`)
+          if (event.stdout?.trim()) lines.push('', block(event.stdout), '')
+          if (event.stderr?.trim()) lines.push('', block(event.stderr), '')
+        } else lines.push(`- Event ${id}: ${event.action}`)
+      }
+      lines.push('')
+    }
+    if (!result.steps?.length) lines.push('No test steps ran.', '')
+    lines.push('---', '')
+  }
+  await writeFile(report.reportPath, `${lines.join('\n')}\n`)
+}
+
+/** Keep passing JSON unpublished until its review artifact exists and cancellation is settled. */
+export async function finalizeReport(
+  report: Report,
+  signal: AbortSignal,
+  save: () => Promise<void>,
+  writeMarkdown: (report: Report) => Promise<void> = writeMarkdownReport,
+): Promise<void> {
+  let rendered = JSON.stringify(report)
+  try {
+    await writeMarkdown(report)
+  } catch (error) {
+    report.complete = false
+    report.passed = false
+    report.error = `Report generation failed: ${error}`
+  }
+  await persistTerminalReport(report, signal, save)
+  if (JSON.stringify(report) === rendered) return
+  try {
+    await writeMarkdown(report)
+  } catch (error) {
+    report.complete = false
+    report.passed = false
+    report.error = `Report generation failed: ${error}`
+    await save()
+  }
 }
 
 /** Persist terminal state without allowing cancellation during the write to return a passing report. */
@@ -57,7 +160,7 @@ export async function persistTerminalReport(report: Report, signal: AbortSignal,
     cancellationRecorded = true
     report.complete = false
     report.passed = false
-    report.error = String(signal.reason ?? new Error('Orbed suite cancelled'))
+    report.error = String(signal.reason ?? new Error('orbed suite cancelled'))
     return true
   }
   recordCancellation()

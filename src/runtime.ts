@@ -31,7 +31,7 @@ export async function executeTest(
   const step = (kind: Step['kind'], instruction: string, target?: Target, options: StepOptions = {}): Promise<void> => {
     if (closed) throw new Error('Test has stopped')
     if (failure) throw failure
-    if (pending) return stop(new Error('Await each Orbed action or expectation before starting another'))
+    if (pending) return stop(new Error('Await each orbed action or expectation before starting another'))
     if (typeof instruction !== 'string' || !instruction.trim()) return stop(new Error('An action or expectation is required'))
     if (options.timeoutMs !== undefined && (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 600_000)) {
       return stop(new Error('Step timeoutMs must be 1–600000'))
@@ -90,7 +90,7 @@ export async function executeTest(
     await withTimeout(Promise.race([failed, Promise.resolve().then(async () => {
       signal?.throwIfAborted()
       await test.run(context)
-      if (pending || unconsumed.size) return stop(new Error('Test callback returned with an unawaited Orbed operation'))
+      if (pending || unconsumed.size) return stop(new Error('Test callback returned with an unawaited orbed operation'))
       if (failure) throw failure
       if (!expectations) throw new Error('A test requires expectations')
     })]), test.timeoutMs, `Test ${test.name}`)

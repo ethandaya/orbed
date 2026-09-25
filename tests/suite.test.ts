@@ -65,6 +65,7 @@ check('invalid suites fail when loaded', async () => {
   await assert.rejects(loadSuite(await workspace({ 'empty.orbed.ts': 'export {}\n' })), /No tests registered by empty\.orbed\.ts/)
   await assert.rejects(loadSuite(await workspace({ 'a.orbed.ts': tests('same'), 'b.orbed.ts': tests('same') })), /unique: same/)
   await assert.rejects(loadSuite(await workspace({ 'orbed.config.ts': 'export default 1\n', 'a.orbed.ts': tests('a') })), /config object/)
+  await assert.rejects(loadSuite(await workspace({ 'orbed.config.ts': 'export default { beforeEach: "" }\n', 'a.orbed.ts': tests('a') })), /beforeEach/)
 })
 
 check('fixing a file that failed to load takes effect on the next load', async () => {

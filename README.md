@@ -1,19 +1,15 @@
 # orbed
 
-Ask an agent to test your app end to end and prove it works, then rerun that
-check whenever you like. You write the steps as sentences. Amp agents carry them
-out in an [orb](https://ampcode.com/docs/orbs), and a step passes only on proof
-that orbed captured itself: screenshots, page snapshots, or command output.
+orbed turns plain-English end-to-end checks into tests you can rerun in [Amp orbs](https://ampcode.com/docs/orbs). Agents exercise the UI, services, and data, and every passing step must cite fresh evidence captured by orbed.
 
-Inspired by [Thorsten Ball](https://x.com/thorstenball/status/2102623376196194763):
-“test this e2e & give me irrefutable proof it works.”
-
-**Early alpha:** APIs will change, and runs consume Amp credits.
+It replaces one-off “test this in the orb” prompts and can take over some expensive E2E tests. It is not a drop-in replacement for every Playwright or Cypress test: a pass means the agent found evidence for the behavior in that run. Inspired by [Thorsten Ball](https://x.com/thorstenball/status/2102623376196194763): “test this e2e & give me irrefutable proof it works.” **Early alpha:** APIs will change, and runs use Amp credits.
 
 ## Install
 
-```sh
-npm i -D orbed && mkdir -p .amp/plugins && echo "export { default } from 'orbed/plugin'" > .amp/plugins/orbed.ts
+Give Amp this prompt from your project:
+
+```text
+Set up orbed from https://github.com/ethandaya/orbed. Run `npm install -D orbed`, create `.amp/plugins/orbed.ts` containing `export { default } from 'orbed/plugin'`, and add a minimal `*.orbed.ts` test for this app's primary flow. Configure any needed Amp portal and disposable test-state reset.
 ```
 
 ## Write a test
@@ -28,35 +24,53 @@ test('increment', async ({ portal }) => {
 })
 ```
 
-Then ask Amp: **“Run the Orbed suite using orbed_run.”**
+Then ask Amp: **“Run the orbed suite.”**
 
-Any `*.orbed.ts` file is picked up automatically. The `portal` shorthand works
-when the orb has exactly one portal; use `portals.get(name)` otherwise.
+Any `*.orbed.ts` file is picked up automatically. The `portal` shorthand works when the orb has exactly one portal; use `portals.get(name)` otherwise.
 
 ## How it works
 
 ```text
 orbed_run
   ├─ load orbed.config.ts and every *.orbed.ts (fresh each run)
-  ├─ per test: private Amp agent thread + fresh browser session
+  ├─ per test: beforeEach, private agent, fresh browsers
   │    └─ per awaited step: one agent turn
   │         ├─ portal step  → browser: open, navigate, snapshot, click, fill, press
   │         ├─ db / service → shell commands against that resource
   │         └─ close step   → cite host-captured evidence, or it's incomplete
-  └─ write .orbed/<run-id>/: report.json, evidence.json, screenshots
+  └─ write reports and per-test evidence under .orbed/<run-id>/
 ```
 
-- **Evidence gate.** A step passes only when the agent cites fresh snapshots or
-  command output that the host captured for that step's portal or resource.
-- **Portal steps stay in the UI.** Commands are rejected on portal steps, so a
-  UI action can't be faked through the API.
-- **Three outcomes.** `passed` means every step was supported, and `failed` means an
-  expectation was contradicted. `incomplete` covers uncertainty, missing
-  evidence, timeouts, and errors. A suite passes only if every test passes.
-- **No reloads.** Test and config edits apply on the next run. Run
-  `plugins: reload` once if you added the plugin mid-session.
+- **Evidence gate.** A step passes only when the agent cites fresh snapshots or command output that the host captured for that step's portal or resource.
+- **Portal steps stay in the browser.** The host rejects shell commands on portal steps.
+- **No reloads.** Test and config edits apply on the next run. Run `plugins: reload` once if you added the plugin mid-session.
 
-## Scenarios
+## Run result
+
+`orbed_run` returns JSON with `runID`, `complete`, `passed`, `reportPath`, and the recorded test and step results. Amp summarizes the outcome and links to `reportPath`, the human-readable report.
+
+Each run writes:
+
+- `.orbed/<run-id>/report.md`: test and step statuses, setup output, action and expectation verdicts, reasons, screenshot links, and cited command output.
+- `.orbed/<run-id>/report.json`: the machine-readable report for that run.
+- `.orbed/<run-id>/<test-number>/evidence.json` and screenshots: raw captured evidence, including page snapshots.
+- `.orbed/latest.json`: a copy of the latest run's JSON report, initialized with `complete: false` and `passed: false` and updated as the run progresses.
+
+Tests are `passed`, `failed` when captured evidence contradicts a step, or `incomplete` when orbed cannot establish an outcome. `complete: true` means the suite finished; `passed: true` requires every test to pass.
+
+### CI and pre-push
+
+A completed tool call does not mean the suite passed. Gate the saved report:
+
+```sh
+rm -f .orbed/latest.json &&
+  amp -x "Run the orbed suite. Do not modify source." --plugin-ready-timeout &&
+  jq -e '.complete and .passed' .orbed/latest.json >/dev/null
+```
+
+Removing `latest.json` prevents a stale pass. Use separate workspaces for concurrent runs. Prefer pre-push or CI over pre-commit because runs take time and consume Amp credits.
+
+## Examples
 
 ### UI, database, and API in one test
 
@@ -84,6 +98,7 @@ import { defineConfig } from 'orbed'
 
 export default defineConfig({
   instructions: 'Disposable local checkout. No payments or external services.',
+  beforeEach: 'bun run test:reset',
   databases: {
     orders: {
       service: 'shop',
@@ -96,10 +111,11 @@ export default defineConfig({
 })
 ```
 
+`beforeEach` runs a host-side Bash command from the workspace root before each test. Use it to reset disposable server and database state; fresh browser sessions do not. A failure or 20-second timeout marks the test `incomplete` and skips its callback and agent.
+
 ### Two portals, two screen sizes
 
-An admin cancels an order and the customer sees it, on mobile and desktop. Each
-portal keeps its own browser session for the whole test.
+An admin cancels an order and the customer sees it, on mobile and desktop. Each portal keeps its own browser session for the whole test.
 
 ```ts
 // tests/cancellation.orbed.ts
@@ -121,34 +137,24 @@ for (const width of [390, 1280]) {
 
 ## Reference
 
-- **Test options:** `test(name, callback, options?)`, where `options` is
-  `{ viewport, timeout }` or a timeout in milliseconds.
+- **Test options:** `test(name, callback, options?)`, where `options` is `{ viewport, timeout }` or a timeout in milliseconds.
   - Defaults are 120 seconds and 1280 × 720 at 2× scale.
   - Per step, use `await handle.expect('…', { timeoutMs: 30_000 })`.
   - Test and step limits max out at ten minutes.
-- **Handles:** `portal`, `portals.get(name)`, `db.get(name)`, and
-  `services.get(name)` all have `action()` and `expect()`. The context's
-  top-level `expect(claim)` checks an app-wide outcome.
+- **Handles:** `portal`, `portals.get(name)`, `db.get(name)`, and `services.get(name)` all have `action()` and `expect()`. The context's top-level `expect(claim)` checks an app-wide outcome.
 - **Config:** `orbed.config.ts` is optional.
   - `instructions` applies to every step.
+  - `beforeEach` runs your disposable-state reset command before each test.
   - `databases` and `services` tell the agent how to inspect each resource.
   - Tests run against the orb's existing Amp services and portals.
 
 ## Develop
 
-Framework tests run the TypeScript source directly with Bun 1.3.10+ and don't run paid agents:
-
 ```sh
-npm ci --ignore-scripts
 bun run test
 bun run typecheck
 ```
 
-This repository's own suite covers [counter](examples/counter.orbed.ts), [checkout](examples/shop.orbed.ts),
-[multiple portals](tests/portals.orbed.ts), and [service/database](tests/resources.orbed.ts)
-scenarios. To also run [deliberate failures](tests/controls.orbed.ts), start Amp
-with `ORBED_INCLUDE_NEGATIVE_CONTROLS=1 amp` and expect a non-passing suite.
-To inject wrong checkout totals, write `total` to `.orbed/shop/fault`, then
-restore `none`.
+Run `npm run changeset` for user-facing changes. Merges to `main` update the release PR; merging that PR publishes to npm.
 
 [MIT](LICENSE)

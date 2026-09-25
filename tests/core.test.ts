@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { test } from '../src/index.ts'
 import { executeTest } from '../src/runtime.ts'
 import { orbed } from '../src/plugin.ts'
-import { evaluate, evidenceError, persistTerminalReport } from '../src/report.ts'
+import { evaluate, evidenceError, finalizeReport, persistTerminalReport } from '../src/report.ts'
 import { portalPathURL, resolveResource } from '../src/portals.ts'
 import type { PluginAPI, PluginToolDefinition } from '@ampcode/plugin'
 import type { PortalTest, Resource, TestContext } from '../src/index.ts'
@@ -313,7 +313,8 @@ check('registration exposes the run, browser and gated command tools without loa
 
 check('cancellation during terminal persistence cannot leave a passing report', async () => {
   const controller = new AbortController()
-  const terminal: Report = { schemaVersion: 1, runID: 'test', complete: true, passed: true, results: [{ name: 'test', status: 'passed' }] }
+  const terminal: Report = { schemaVersion: 1, runID: 'test', complete: true, passed: true,
+    results: [{ name: 'test', status: 'passed' }], reportPath: 'report.md' }
   let writes = 0
   await persistTerminalReport(terminal, controller.signal, async () => {
     writes++
@@ -323,4 +324,39 @@ check('cancellation during terminal persistence cannot leave a passing report', 
   assert.equal(terminal.complete, false)
   assert.equal(terminal.passed, false)
   assert.match(terminal.error!, /cancelled during write/)
+})
+
+check('finalization publishes success only after Markdown and rewrites it after cancellation', async () => {
+  const controller = new AbortController()
+  const terminal: Report = { schemaVersion: 1, runID: 'test', complete: true, passed: true,
+    results: [{ name: 'test', status: 'passed' }], reportPath: 'report.md' }
+  const gate = deferred()
+  const rendered: boolean[] = []
+  const saved: boolean[] = []
+  let writes = 0
+  const running = finalizeReport(terminal, controller.signal, async () => { saved.push(terminal.passed) }, async () => {
+    rendered.push(terminal.passed)
+    if (++writes === 1) await gate.promise
+  })
+  await new Promise(setImmediate)
+  assert.deepEqual(saved, [])
+  controller.abort(new Error('cancelled during Markdown'))
+  gate.resolve()
+  await running
+  assert.deepEqual(rendered, [true, false])
+  assert.equal(saved.every(passed => !passed), true)
+  assert.equal(terminal.passed, false)
+  assert.match(terminal.error!, /cancelled during Markdown/)
+})
+
+check('Markdown failure never publishes a passing terminal report', async () => {
+  const terminal: Report = { schemaVersion: 1, runID: 'test', complete: true, passed: true,
+    results: [{ name: 'test', status: 'passed' }], reportPath: 'report.md' }
+  const saved: boolean[] = []
+  await finalizeReport(terminal, new AbortController().signal, async () => { saved.push(terminal.passed) }, async () => {
+    throw new Error('disk full')
+  })
+  assert.equal(saved.every(passed => !passed), true)
+  assert.equal(terminal.passed, false)
+  assert.match(terminal.error!, /Report generation failed.*disk full/)
 })
